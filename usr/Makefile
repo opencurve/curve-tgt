@@ -12,6 +12,14 @@ endif
 TGTD_OBJS += $(addprefix iscsi/, conn.o param.o session.o \
 		iscsid.o target.o chap.o sha1.o md5.o transport.o iscsi_tcp.o \
 		isns.o)
+CURVE_LIBS = -lnebdclient -lnebd_common -lclient_proto -lbrpc \
+             -lcc_brpc_internal_proto -lcc_brpc_idl_options_proto \
+             -ljson -lbthread -lbvar -lmcpack2pb -ljson2pb -lbutil -lprotobuf \
+	     -lprotobuf_lite -lleveldb -lglog -lgflags
+
+ifneq ($(CURVE_CBD),)
+MODULES += bs_curve.so
+endif
 
 ifneq ($(CEPH_RBD),)
 MODULES += bs_rbd.so
@@ -99,6 +107,9 @@ tgtimg: $(TGTIMG_OBJS)
 
 bs_rbd.so: bs_rbd.c
 	$(CC) -shared $(CFLAGS) bs_rbd.c -o bs_rbd.so -lrados -lrbd
+
+bs_curve.so: bs_curve.c
+	$(CC) -shared $(CFLAGS) bs_curve.c -o bs_curve.so -Wl,-rpath=/usr/lib/nebd -L/usr/lib/nebd $(CURVE_LIBS) -lpthread
 
 bs_glfs.so: bs_glfs.c
 	$(CC) -I/usr/include/glusterfs/api -shared $(CFLAGS) bs_glfs.c -o bs_glfs.so -lgfapi
