@@ -88,6 +88,7 @@ struct lu_phy_attr {
 	unsigned char lbppbe;	/* Logical blocks per physical block exponent */
 	char no_auto_lbppbe;    /* Do not update it automatically when the
 				   backing file changes */
+	char dpofua;
 	uint16_t la_lba;	/* Lowest aligned LBA */
 
 	/* VPD pages 0x80 -> 0xff masked with 0x80*/

@@ -310,7 +310,9 @@ static int bs_init_signalfd(void)
 	sigaddset(&mask, SIGUSR2);
 	sigprocmask(SIG_BLOCK, &mask, NULL);
 
-	sig_fd = __signalfd(-1, &mask, 0);
+	// This has problem with curve, signalfd is not safe in threaded progam,
+	// because you don't know which thread unmasked the signal. @yfxu
+	sig_fd = -1; //__signalfd(-1, &mask, 0);
 	if (sig_fd < 0)
 		return 1;
 
