@@ -229,8 +229,7 @@ stop:
 		write(info->evt_fd, &count, 8);
 
 		pthread_rwlock_unlock(&info->close_lock);
-		eprintf("write same complete: %d\n", iocb->ctx.ret);
-
+		dprintf("write same complete: %d\n", iocb->ctx.ret);
 	} else {
 		bs_curve_io_prep_write_same_2(info, iocb);
 		if (nebd_lib_aio_pwrite(info->curve_fd, &iocb->ctx)) {
@@ -250,12 +249,10 @@ static int bs_curve_io_prep_write_same_2(struct bs_curve_info *info,
 
 	switch(cmd->scb[1] & 0x06) {
 	case 0x02: /* PBDATA==0 LBDATA==1 */
-		eprintf("0x02\n");
 		put_unaligned_be32(offset, tmpbuf);
 		break;
 	case 0x04: /* PBDATA==1 LBDATA==0 */
 		/* physical sector format */
-		eprintf("0x04\n");
 		put_unaligned_be64(offset, tmpbuf);
 		break;
 	}
