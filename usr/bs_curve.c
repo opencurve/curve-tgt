@@ -394,7 +394,7 @@ static int bs_curve_open(struct scsi_lu *lu, char *path, int *fd, uint64_t *size
 	}
 	blksize = 4096; //FIXME
 
-	eprintf("opened curve volume %s for tgt:%d lun:%"PRId64 ", fd:%d\n",
+	eprintf("opened curve volume %s for tgt:%d lun:%"PRId64 ", curve_fd:%d\n",
 		 path, info->lu->tgt->tid, info->lu->lun, info->curve_fd);
 
 	*size = nebd_lib_filesize(info->curve_fd);
