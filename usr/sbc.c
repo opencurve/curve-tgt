@@ -127,6 +127,19 @@ static int sbc_mode_sense(int host_no, struct scsi_cmd *cmd)
 	if (ret != SAM_STAT_GOOD)
 		return ret;
 
+	if (cmd->dev->attrs.dpofua && ret == SAM_STAT_GOOD) {
+		const uint8_t device_specific = 0x10; /* DPOFUA */
+		uint8_t *data, mode6;
+
+		mode6 = (cmd->scb[0] == 0x1a);
+		data = scsi_get_in_buffer(cmd);
+
+		if (mode6)
+			data[2] = device_specific;
+		else
+			data[3] = device_specific;
+	}
+
 	/*
 	 * If this is a read-only lun, we must set the write protect bit
 	 */
