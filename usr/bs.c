@@ -37,6 +37,7 @@
 #include <sys/types.h>
 #include <sys/epoll.h>
 #include <sys/stat.h>
+#include <sys/eventfd.h>
 #include <linux/types.h>
 #include <unistd.h>
 
@@ -190,10 +191,10 @@ static void bs_sig_request_done(int fd, int events, void *data)
 {
 	int ret;
 	struct scsi_cmd *cmd;
-	struct signalfd_siginfo siginfo[16];
+	uint64_t ev_count;
 	LIST_HEAD(list);
 
-	ret = read(fd, (char *)siginfo, sizeof(siginfo));
+	ret = read(fd, (char *)&ev_count, sizeof(ev_count));
 	if (ret <= 0) {
 		return;
 	}
@@ -248,8 +249,11 @@ static void *bs_thread_worker_fn(void *arg)
 
 		if (sig_fd < 0)
 			pthread_cond_signal(&finished_cond);
-		else
-			kill(getpid(), SIGUSR2);
+		else {
+			uint64_t count = 1;
+			if (write(sig_fd, &count, sizeof(count)) == -1 && errno != EAGAIN)
+				eprintf("failed to write to sig_fd: %s\n", strerror(errno));
+		}
 	}
 
 	pthread_exit(NULL);
@@ -312,7 +316,7 @@ static int bs_init_signalfd(void)
 
 	// This has problem with curve, signalfd is not safe in threaded progam,
 	// because you don't know which thread unmasked the signal. @yfxu
-	sig_fd = -1; //__signalfd(-1, &mask, 0);
+	sig_fd = eventfd(0, O_NONBLOCK);
 	if (sig_fd < 0)
 		return 1;
 
