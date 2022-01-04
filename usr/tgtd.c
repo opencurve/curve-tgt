@@ -36,6 +36,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <poll.h>
 
 #include "list.h"
 #include "tgtd.h"
@@ -345,18 +346,16 @@ int call_program(const char *cmd, void (*callback)(void *data, int result),
 		eprintf("execv failed for: %s, %m\n", cmd);
 		exit(-1);
 	} else {
-		struct timeval tv;
-		fd_set rfds;
+		struct pollfd ev;
 		int ret_sel;
 
 		close(fds[1]);
 		/* 0.1 second is okay, as the initiator will retry anyway */
 		do {
-			FD_ZERO(&rfds);
-			FD_SET(fds[0], &rfds);
-			tv.tv_sec = 0;
-			tv.tv_usec = 100000;
-			ret_sel = select(fds[0]+1, &rfds, NULL, NULL, &tv);
+			ev.fd = fds[0];
+			ev.events = POLLIN;
+			ev.revents = 0;
+			ret_sel = poll(&ev, 1, 100);
 		} while (ret_sel < 0 && errno == EINTR);
 		if (ret_sel <= 0) { /* error or timeout */
 			eprintf("timeout on redirect callback, terminating "
