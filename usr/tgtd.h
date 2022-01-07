@@ -4,6 +4,7 @@
 #include "log.h"
 #include "scsi_cmnd.h"
 #include "tgtadm_error.h"
+#include "lib/tree.h"
 
 #ifdef USE_SYSTEMD
 #include <systemd/sd-daemon.h>
@@ -397,6 +398,7 @@ struct event_data {
 		int scheduled;
 	};
 	void *data;
+	RB_ENTRY(event_data) e_node;
 	struct list_head e_list;
 };
 

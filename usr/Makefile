@@ -12,6 +12,7 @@ endif
 TGTD_OBJS += $(addprefix iscsi/, conn.o param.o session.o \
 		iscsid.o target.o chap.o sha1.o md5.o transport.o iscsi_tcp.o \
 		isns.o)
+
 CURVE_LIBS = -lnebdclient -lnebd_common -lclient_proto -lbrpc \
              -lcc_brpc_internal_proto -lcc_brpc_idl_options_proto \
              -ljson -lbthread -lbvar -lmcpack2pb -ljson2pb -lbutil -lprotobuf \
