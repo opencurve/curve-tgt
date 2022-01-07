@@ -43,13 +43,21 @@
 #include "driver.h"
 #include "work.h"
 #include "util.h"
+#include "lib/tree.h"
 
 unsigned long pagesize, pageshift;
 
 int system_active = 1;
-static int ep_fd;
 static char program_name[] = "tgtd";
-static LIST_HEAD(tgt_events_list);
+
+RB_HEAD(ev_list, event_data);
+struct tgt_events_loop {
+	struct ev_list root;
+	int ep_fd;
+} main_evloop;
+
+RB_PROTOTYPE(ev_list, event_data, e_node,);
+
 static LIST_HEAD(tgt_sched_events_list);
 
 static struct option const long_options[] = {
@@ -199,6 +207,24 @@ void create_pid_file(const char *path)
 		eprintf("can't write and remove %s, %m\n", path);
 		unlink(path);
 	}
+static inline int event_cmp(struct event_data *a, struct event_data *b)
+{
+	if (a->fd < b->fd)
+		return -1;
+	else if (a->fd > b->fd)
+		return 1;
+	return 0;
+}
+
+RB_GENERATE2(ev_list, event_data, e_node, event_cmp, int, fd);
+
+static int event_insert(struct ev_list *list, struct event_data *ev)
+{
+	struct event_data *tmp = ev_list_RB_INSERT(list, ev);
+	if (tmp) {
+		eprintf("event_insert match for fd %d", ev->fd);
+	}
+	return tmp == NULL;
 }
 
 int tgt_event_add(int fd, int events, event_handler_t handler, void *data)
@@ -218,25 +244,19 @@ int tgt_event_add(int fd, int events, event_handler_t handler, void *data)
 	memset(&ev, 0, sizeof(ev));
 	ev.events = events;
 	ev.data.ptr = tev;
-	err = epoll_ctl(ep_fd, EPOLL_CTL_ADD, fd, &ev);
+	err = epoll_ctl(main_evloop.ep_fd, EPOLL_CTL_ADD, fd, &ev);
 	if (err) {
 		eprintf("Cannot add fd, %m\n");
 		free(tev);
 	} else
-		list_add(&tev->e_list, &tgt_events_list);
+		event_insert(&main_evloop.root, tev);
 
 	return err;
 }
 
 static struct event_data *tgt_event_lookup(int fd)
 {
-	struct event_data *tev;
-
-	list_for_each_entry(tev, &tgt_events_list, e_list) {
-		if (tev->fd == fd)
-			return tev;
-	}
-	return NULL;
+	return ev_list_RB_LOOKUP(&main_evloop.root, fd);
 }
 
 static int event_need_refresh;
@@ -252,11 +272,11 @@ void tgt_event_del(int fd)
 		return;
 	}
 
-	ret = epoll_ctl(ep_fd, EPOLL_CTL_DEL, fd, NULL);
+	ret = epoll_ctl(main_evloop.ep_fd, EPOLL_CTL_DEL, fd, NULL);
 	if (ret < 0)
 		eprintf("fail to remove epoll event, %s\n", strerror(errno));
 
-	list_del(&tev->e_list);
+	ev_list_RB_REMOVE(&main_evloop.root, tev);
 	free(tev);
 
 	event_need_refresh = 1;
@@ -277,7 +297,7 @@ int tgt_event_modify(int fd, int events)
 	ev.events = events;
 	ev.data.ptr = tev;
 
-	return epoll_ctl(ep_fd, EPOLL_CTL_MOD, fd, &ev);
+	return epoll_ctl(main_evloop.ep_fd, EPOLL_CTL_MOD, fd, &ev);
 }
 
 void tgt_init_sched_event(struct event_data *evt,
@@ -445,7 +465,7 @@ retry:
 	sched_remains = tgt_exec_scheduled();
 	timeout = sched_remains ? 0 : -1;
 
-	nevent = epoll_wait(ep_fd, events, ARRAY_SIZE(events), timeout);
+	nevent = epoll_wait(main_evloop.ep_fd, events, ARRAY_SIZE(events), timeout);
 	if (nevent < 0) {
 		if (errno != EINTR) {
 			eprintf("%m\n");
@@ -543,6 +563,16 @@ static int parse_params(char *name, char *p)
 	return -1;
 }
 
+static void init_event_loop(void)
+{
+	RB_INIT(&main_evloop.root);
+	main_evloop.ep_fd = epoll_create(4096);
+	if (main_evloop.ep_fd < 0) {
+		fprintf(stderr, "can't create epoll fd, %m\n");
+		exit(1);
+	}
+}
+
 int main(int argc, char **argv)
 {
 	struct sigaction sa_old;
@@ -615,11 +645,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	ep_fd = epoll_create(4096);
-	if (ep_fd < 0) {
-		fprintf(stderr, "can't create epoll fd, %m\n");
-		exit(1);
-	}
+	init_event_loop();
 
 	spare_args = optind < argc ? argv[optind] : NULL;
 
