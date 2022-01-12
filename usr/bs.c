@@ -311,9 +311,9 @@ static int bs_init_signalfd(void)
 
 	pthread_mutex_init(&finished_lock, NULL);
 
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGUSR2);
-	sigprocmask(SIG_BLOCK, &mask, NULL);
+//	sigemptyset(&mask);
+//	sigaddset(&mask, SIGUSR2);
+//	sigprocmask(SIG_BLOCK, &mask, NULL);
 
 	// This has problem with curve, signalfd is not safe in threaded progam,
 	// because you don't know which thread unmasked the signal. @yfxu
