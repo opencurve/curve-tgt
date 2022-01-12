@@ -355,7 +355,7 @@ static int chap_initiator_auth_create_challenge(struct iscsi_connection *conn)
 		return CHAP_INITIATOR_ERROR;
 
 	text_key_add(conn, "CHAP_A", p);
-	conn->auth.chap.id = ++chap_id;
+	conn->auth.chap.id = __atomic_add_fetch(&chap_id, 1, __ATOMIC_RELAXED);
 	sprintf(text, "%u", (unsigned char)conn->auth.chap.id);
 	text_key_add(conn, "CHAP_I", text);
 
@@ -476,7 +476,7 @@ static int chap_initiator_auth_check_response(struct iscsi_connection *conn)
 		goto out;
 	}
 
-	conn->state = CHAP_AUTH_STATE_RESPONSE;
+	conn->auth_state = CHAP_AUTH_STATE_RESPONSE;
  out:
 	if (his_digest)
 		free(his_digest);
