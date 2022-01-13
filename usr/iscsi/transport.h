@@ -6,6 +6,7 @@
 
 struct iscsi_connection;
 struct iscsi_task;
+struct tgt_evloop;
 
 struct iscsi_transport {
 	struct list_head iscsi_transport_siblings;
@@ -39,7 +40,10 @@ struct iscsi_transport {
 			      struct sockaddr *sa, socklen_t *len);
 	int (*ep_getpeername)(struct iscsi_connection *conn,
 			      struct sockaddr *sa, socklen_t *len);
-	void (*ep_nop_reply) (long ttt);
+	void (*ep_nop_reply) (struct tgt_evloop *evloop, long ttt);
+	int (*ep_init_evloop) (struct tgt_evloop *evloop);
+	void (*ep_fini_evloop) (struct tgt_evloop *evloop);
+	void (*ep_migrate_evloop) (struct iscsi_connection *conn, struct tgt_evloop *old, struct tgt_evloop *new);
 };
 
 extern int iscsi_transport_register(struct iscsi_transport *);

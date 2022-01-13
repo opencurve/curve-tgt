@@ -36,14 +36,13 @@
 #include "tgtd.h"
 #include "util.h"
 #include "work.h"
+#include "target.h"
 
-static void iscsi_tcp_event_handler(int fd, int events, void *data);
+static void iscsi_tcp_event_handler(struct tgt_evloop *evloop, int fd, int events, void *data);
 static void iscsi_tcp_release(struct iscsi_connection *conn);
 static struct iscsi_task *iscsi_tcp_alloc_task(struct iscsi_connection *conn,
 						size_t ext_len);
 static void iscsi_tcp_free_task(struct iscsi_task *task);
-
-static long nop_ttt;
 
 static int listen_fds[8];
 static struct iscsi_transport iscsi_tcp;
@@ -66,10 +65,11 @@ static inline struct iscsi_tcp_connection *TCP_CONN(struct iscsi_connection *con
 	return container_of(conn, struct iscsi_tcp_connection, iscsi_conn);
 }
 
-static struct tgt_work nop_work;
-
-/* all iscsi connections */
-static struct list_head iscsi_tcp_conn_list;
+struct iscsi_tcp_private {
+	struct tgt_work nop_work;
+	struct list_head iscsi_tcp_conn_list;
+	long nop_ttt;
+};
 
 static int iscsi_send_ping_nop_in(struct iscsi_tcp_connection *tcp_conn)
 {
@@ -90,11 +90,14 @@ static int iscsi_send_ping_nop_in(struct iscsi_tcp_connection *tcp_conn)
 	return 0;
 }
 
-static void iscsi_tcp_nop_work_handler(void *data)
+static void iscsi_tcp_nop_work_handler(struct tgt_work *w)
 {
+	struct tgt_evloop *evloop = w->evloop;
+	struct iscsi_tcp_private *prv = tgt_event_userdata(evloop,
+		EV_DATA_TCPIP);
 	struct iscsi_tcp_connection *tcp_conn;
 
-	list_for_each_entry(tcp_conn, &iscsi_tcp_conn_list, tcp_conn_siblings) {
+	list_for_each_entry(tcp_conn, &prv->iscsi_tcp_conn_list, tcp_conn_siblings) {
 		if (tcp_conn->nop_interval == 0)
 			continue;
 
@@ -112,22 +115,24 @@ static void iscsi_tcp_nop_work_handler(void *data)
 			/* cant/shouldnt delete tcp_conn from within the loop */
 			break;
 		}
-		nop_ttt++;
-		if (nop_ttt == ISCSI_RESERVED_TAG)
-			nop_ttt = 1;
+		prv->nop_ttt++;
+		if (prv->nop_ttt == ISCSI_RESERVED_TAG)
+			prv->nop_ttt = 1;
 
-		tcp_conn->ttt = nop_ttt;
+		tcp_conn->ttt = prv->nop_ttt;
 		iscsi_send_ping_nop_in(tcp_conn);
 	}
 
-	add_work(&nop_work, 1);
+	ev_add_work(w->evloop, w, 1);
 }
 
-static void iscsi_tcp_nop_reply(long ttt)
+static void iscsi_tcp_nop_reply(struct tgt_evloop *evloop, long ttt)
 {
-	struct iscsi_tcp_connection *tcp_conn;
+	struct iscsi_tcp_private *prv = tgt_event_userdata(evloop,
+		EV_DATA_TCPIP);
+	 struct iscsi_tcp_connection *tcp_conn;
 
-	list_for_each_entry(tcp_conn, &iscsi_tcp_conn_list, tcp_conn_siblings) {
+	list_for_each_entry(tcp_conn, &prv->iscsi_tcp_conn_list, tcp_conn_siblings) {
 		if (tcp_conn->ttt != ttt)
 			continue;
 		tcp_conn->nop_inflight_count = 0;
@@ -206,8 +211,10 @@ static int set_nodelay(int fd)
 	return ret;
 }
 
-static void accept_connection(int afd, int events, void *data)
+static void accept_connection(struct tgt_evloop *evloop, int afd, int events, void *data)
 {
+	struct iscsi_tcp_private *prv = tgt_event_userdata(evloop,
+		EV_DATA_TCPIP);
 	struct sockaddr_storage from;
 	socklen_t namesize;
 	struct iscsi_connection *conn;
@@ -250,19 +257,20 @@ static void accept_connection(int afd, int events, void *data)
 	}
 
 	tcp_conn->fd = fd;
+	conn->evloop = evloop;
 	conn->tp = &iscsi_tcp;
 
 	conn_read_pdu(conn);
 	set_non_blocking(fd);
 
-	ret = tgt_event_add(fd, EPOLLIN, iscsi_tcp_event_handler, conn);
+	ret = tgt_event_insert(evloop, fd, EPOLLIN, iscsi_tcp_event_handler, conn);
 	if (ret) {
 		conn_exit(conn);
 		free(tcp_conn);
 		goto out;
 	}
 
-	list_add(&tcp_conn->tcp_conn_siblings, &iscsi_tcp_conn_list);
+	list_add(&tcp_conn->tcp_conn_siblings, &prv->iscsi_tcp_conn_list);
 
 	return;
 out:
@@ -270,9 +278,12 @@ out:
 	return;
 }
 
-static void iscsi_tcp_event_handler(int fd, int events, void *data)
+static void do_iscsi_tcp_event_handler(struct tgt_evloop *evloop, int fd, int events, void *data,
+	int *closed)
 {
 	struct iscsi_connection *conn = (struct iscsi_connection *) data;
+
+	*closed = 0;
 
 	if (events & EPOLLIN)
 		iscsi_rx_handler(conn);
@@ -286,6 +297,28 @@ static void iscsi_tcp_event_handler(int fd, int events, void *data)
 	if (conn->state == STATE_CLOSE) {
 		dprintf("connection closed %p\n", conn);
 		conn_close(conn);
+		*closed = 1;
+	}
+}
+
+static void iscsi_tcp_event_handler(struct tgt_evloop *evloop, int fd, int events, void *data)
+{
+	struct iscsi_connection *conn = (struct iscsi_connection *) data;
+	struct target *migrate_to = NULL;
+	int closed;
+
+	do_iscsi_tcp_event_handler(evloop, fd, events, data, &closed);
+	if (!closed) {
+		if ((migrate_to = conn->migrate_to)) {
+			target_assert_locked(migrate_to);
+			conn->migrate_to = NULL;
+			dprintf("connection %p migrate_to %p\n", conn, migrate_to);
+			conn->tp->ep_migrate_evloop(conn, evloop, migrate_to->evloop);
+			conn->migrate_to = NULL;
+			conn->evloop = migrate_to->evloop;
+			target_unlock(migrate_to);
+			return;
+		}
 	}
 }
 
@@ -367,7 +400,7 @@ int iscsi_tcp_init_portal(char *addr, int port, int tpgt)
 		}
 
 		set_non_blocking(fd);
-		ret = tgt_event_add(fd, EPOLLIN, accept_connection, NULL);
+		ret = tgt_event_insert(main_evloop, fd, EPOLLIN, accept_connection, NULL);
 		if (ret)
 			close(fd);
 		else {
@@ -429,7 +462,7 @@ int iscsi_delete_portal(char *addr, int port)
 			    iscsi_portal_siblings) {
 		if (!strcmp(addr, portal->addr) && port == portal->port) {
 			if (portal->fd != -1)
-				tgt_event_del(portal->fd);
+				tgt_event_delete(main_evloop, portal->fd);
 			close(portal->fd);
 			list_del(&portal->iscsi_portal_siblings);
 			free(portal->addr);
@@ -454,14 +487,30 @@ static int iscsi_tcp_init(void)
 	if (list_empty(&iscsi_portals_list)) {
 		iscsi_add_portal(NULL, ISCSI_LISTEN_PORT, 1);
 	}
-
-	INIT_LIST_HEAD(&iscsi_tcp_conn_list);
-
-	nop_work.func = iscsi_tcp_nop_work_handler;
-	nop_work.data = &nop_work;
-	add_work(&nop_work, 1);
-
 	return 0;
+}
+
+static int iscsi_tcp_init_evloop(struct tgt_evloop *evloop)
+{
+	struct iscsi_tcp_private *prv = zalloc(sizeof(*prv));
+
+	INIT_LIST_HEAD(&prv->iscsi_tcp_conn_list);
+
+	prv->nop_work.func = iscsi_tcp_nop_work_handler;
+	prv->nop_work.data = &prv->nop_work;
+	ev_add_work(evloop, &prv->nop_work, 1);
+
+	tgt_event_set_userdata(evloop, EV_DATA_TCPIP, prv);
+	return 0;
+}
+
+static void iscsi_tcp_fini_evloop(struct tgt_evloop *evloop)
+{
+	struct iscsi_tcp_private *prv = tgt_event_userdata(evloop,
+		EV_DATA_TCPIP);
+
+	tgt_event_set_userdata(evloop, EV_DATA_TCPIP, NULL);
+	free(prv);
 }
 
 static void iscsi_tcp_exit(void)
@@ -476,10 +525,11 @@ static void iscsi_tcp_exit(void)
 
 static int iscsi_tcp_conn_login_complete(struct iscsi_connection *conn)
 {
+	struct iscsi_tcp_private *prv = tgt_event_userdata(conn->evloop, EV_DATA_TCPIP);
 	struct iscsi_tcp_connection *tcp_conn;
 	struct iscsi_target *target;
 
-	list_for_each_entry(tcp_conn, &iscsi_tcp_conn_list, tcp_conn_siblings)
+	list_for_each_entry(tcp_conn, &prv->iscsi_tcp_conn_list, tcp_conn_siblings)
 		if (&tcp_conn->iscsi_conn == conn)
 			break;
 
@@ -497,6 +547,21 @@ static int iscsi_tcp_conn_login_complete(struct iscsi_connection *conn)
 	}
 
 	return 0;
+}
+
+static void iscsi_tcp_migrate_evloop(
+	struct iscsi_connection *conn, struct tgt_evloop *old, struct tgt_evloop *new)
+{
+	struct iscsi_tcp_connection *tcp_conn = TCP_CONN(conn);
+	//struct iscsi_tcp_private *old_prv = tgt_event_userdata(old, EV_DATA_TCPIP);
+	struct iscsi_tcp_private *new_prv = tgt_event_userdata(new, EV_DATA_TCPIP);
+
+	list_del_init(&tcp_conn->tcp_conn_siblings);
+	list_add_tail(&tcp_conn->tcp_conn_siblings, &new_prv->iscsi_tcp_conn_list);
+	if (tgt_event_migrate(tcp_conn->fd, old, new)) {
+		eprintf("can not migrate conn");
+		abort();
+	}
 }
 
 static size_t iscsi_tcp_read(struct iscsi_connection *conn, void *buf,
@@ -528,7 +593,7 @@ static size_t iscsi_tcp_close(struct iscsi_connection *conn)
 {
 	struct iscsi_tcp_connection *tcp_conn = TCP_CONN(conn);
 
-	tgt_event_del(tcp_conn->fd);
+	tgt_event_delete(conn->evloop, tcp_conn->fd);
 	conn->state = STATE_CLOSE;
 	tcp_conn->nop_interval = 0;
 	return 0;
@@ -576,7 +641,7 @@ static void iscsi_event_modify(struct iscsi_connection *conn, int events)
 	struct iscsi_tcp_connection *tcp_conn = TCP_CONN(conn);
 	int ret;
 
-	ret = tgt_event_modify(tcp_conn->fd, events);
+	ret = tgt_event_change(conn->evloop, tcp_conn->fd, events);
 	if (ret)
 		eprintf("tgt_event_modify failed\n");
 }
@@ -674,6 +739,9 @@ static struct iscsi_transport iscsi_tcp = {
 	.ep_getsockname		= iscsi_tcp_getsockname,
 	.ep_getpeername		= iscsi_tcp_getpeername,
 	.ep_nop_reply		= iscsi_tcp_nop_reply,
+	.ep_init_evloop		= iscsi_tcp_init_evloop,
+	.ep_fini_evloop		= iscsi_tcp_fini_evloop,
+	.ep_migrate_evloop	= iscsi_tcp_migrate_evloop
 };
 
 __attribute__((constructor)) static void iscsi_transport_init(void)

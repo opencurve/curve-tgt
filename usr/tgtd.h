@@ -294,12 +294,13 @@ extern tgtadm_err tgt_bind_host_to_target(int tid, int host_no);
 extern tgtadm_err tgt_unbind_host_to_target(int tid, int host_no);
 
 struct event_data;
+struct tgt_evloop;
 typedef void (*sched_event_handler_t)(struct event_data *tev);
 
 extern void tgt_init_sched_event(struct event_data *evt,
 			  sched_event_handler_t sched_handler, void *data);
 
-typedef void (*event_handler_t)(int fd, int events, void *data);
+typedef void (*event_handler_t)(struct tgt_evloop *evloop, int fd, int events, void *data);
 
 extern int tgt_event_add(int fd, int events, event_handler_t handler, void *data);
 extern void tgt_event_del(int fd);
@@ -403,8 +404,10 @@ struct event_data {
 	};
 	void *data;
 	RB_ENTRY(event_data) e_node;
+	int events;
 	struct list_head e_list;
 };
+
 
 int call_program(const char *cmd,
 		    void (*callback)(void *data, int result), void *data,
@@ -415,5 +418,53 @@ void update_lbppbe(struct scsi_lu *lu, int blksize);
 struct service_action *
 find_service_action(struct service_action *service_action,
 		    uint32_t action);
+
+RB_HEAD(ev_list, event_data);
+struct tgt_evloop {
+	struct ev_list root;
+	int ep_fd;
+	int async_fd;
+	int event_need_refresh;
+	int stop;
+	struct event_data async_event;
+	struct list_head sched_events_list;
+	void (*release)(struct tgt_evloop *);
+	void (*acquire)(struct tgt_evloop *);
+	void *userdata[3];
+};
+
+#define EV_DATA_WORK_TIMER 0
+#define EV_DATA_TCPIP      1 
+#define EV_DATA_TARGET     2
+
+struct tgt_evloop_listener {
+	struct list_head node;
+	void (*callback)(struct tgt_evloop *evloop, int status);
+};
+
+struct tgt_evloop *tgt_new_evloop(void);
+void tgt_destroy_evloop(struct tgt_evloop *evloop);
+void tgt_event_loop(struct tgt_evloop *evloop);
+void tgt_event_stop(struct tgt_evloop *evloop);
+void tgt_event_kick(struct tgt_evloop *evloop);
+void tgt_append_sched_event(struct tgt_evloop *evloop, struct event_data *evt);
+int tgt_event_change(struct tgt_evloop *evloop, int fd, int events);
+int tgt_event_insert(struct tgt_evloop *evloop, int fd, int events, event_handler_t handler, void *data);
+int tgt_event_get(struct tgt_evloop *evloop, int fd);
+void tgt_event_delete(struct tgt_evloop *evloop, int fd);
+void tgt_event_set_loop_release_cb(struct tgt_evloop *evloop,
+	void (*release)(struct tgt_evloop *), void (*acquire)(struct tgt_evloop *));
+void *tgt_event_userdata(struct tgt_evloop *, int idx);
+void *tgt_event_set_userdata(struct tgt_evloop *, int idx, void *data);
+int tgt_event_migrate(int fd, struct tgt_evloop *old, struct tgt_evloop *new);
+
+#define TGT_EVLOOP_UP	0
+#define TGT_EVLOOP_DOWN	1
+void tgt_evloop_broadcast_listener(struct tgt_evloop *evloop, int status);
+
+int lld_init_evloop(struct tgt_evloop *evloop);
+void lld_fini_evloop(struct tgt_evloop *evloop);
+
+extern struct tgt_evloop *main_evloop;
 
 #endif

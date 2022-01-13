@@ -50,21 +50,8 @@
 
 LIST_HEAD(bst_list);
 
-static LIST_HEAD(finished_list);
-static pthread_mutex_t finished_lock;
-
 /* used by both bs_rdwr.c and bs_rbd.c */
 int nr_iothreads = 16;
-
-static int sig_fd = -1;
-
-static int command_fd[2];
-static int done_fd[2];
-static pthread_t ack_thread;
-/* protected by pipe */
-static LIST_HEAD(ack_list);
-static pthread_cond_t finished_cond;
-
 
 void bs_create_opcode_map(struct backingstore_template *bst,
 			  unsigned char *opcodes, int num)
@@ -105,109 +92,34 @@ struct backingstore_template *get_backingstore_template(const char *name)
 	return NULL;
 }
 
-/* threading helper functions */
-
-static void *bs_thread_ack_fn(void *arg)
+static void bs_thread_request_done(struct tgt_evloop *evloop, int fd, int events, void *data)
 {
-	int command, ret, nr;
+	struct bs_thread_info *info = data;
 	struct scsi_cmd *cmd;
+	struct list_head tmp_list;
+	eventfd_t value;
+	int ret;
 
-retry:
-	ret = read(command_fd[0], &command, sizeof(command));
+	INIT_LIST_HEAD(&tmp_list);
+	ret = eventfd_read(info->sig_fd, &value);
 	if (ret < 0) {
-		eprintf("ack pthread will be dead, %m\n");
-		if (errno == EAGAIN || errno == EINTR)
-			goto retry;
-
-		goto out;
+		if (errno != EAGAIN) {
+			eprintf("error read eventfd, %m\n");
+			abort();
+		}
 	}
 
-	pthread_mutex_lock(&finished_lock);
+	pthread_mutex_lock(&info->finished_lock);
+	list_splice_init(&info->finished_list, &tmp_list);
+	pthread_mutex_unlock(&info->finished_lock);
 
-	while (list_empty(&finished_list))
-		pthread_cond_wait(&finished_cond, &finished_lock);
-
-	while (!list_empty(&finished_list)) {
-		cmd = list_first_entry(&finished_list,
-				 struct scsi_cmd, bs_list);
-
-		dprintf("found %p\n", cmd);
-
-		list_del(&cmd->bs_list);
-		list_add_tail(&cmd->bs_list, &ack_list);
-	}
-
-	pthread_mutex_unlock(&finished_lock);
-
-	nr = 1;
-rewrite:
-	ret = write(done_fd[1], &nr, sizeof(nr));
-	if (ret < 0) {
-		eprintf("can't ack tgtd, %m\n");
-		if (errno == EAGAIN || errno == EINTR)
-			goto rewrite;
-
-		goto out;
-	}
-
-	goto retry;
-out:
-	pthread_exit(NULL);
-}
-
-static void bs_thread_request_done(int fd, int events, void *data)
-{
-	struct scsi_cmd *cmd;
-	int nr_events, ret;
-
-	ret = read(done_fd[0], &nr_events, sizeof(nr_events));
-	if (ret < 0) {
-		eprintf("wrong wakeup\n");
-		return;
-	}
-
-	while (!list_empty(&ack_list)) {
-		cmd = list_first_entry(&ack_list,
+	while (!list_empty(&tmp_list)) {
+		cmd = list_first_entry(&tmp_list,
 				       struct scsi_cmd, bs_list);
 
 		dprintf("back to tgtd, %p\n", cmd);
 
 		list_del(&cmd->bs_list);
-		target_cmd_io_done(cmd, scsi_get_result(cmd));
-	}
-
-rewrite:
-	ret = write(command_fd[1], &nr_events, sizeof(nr_events));
-	if (ret < 0) {
-		eprintf("can't write done, %m\n");
-		if (errno == EAGAIN || errno == EINTR)
-			goto rewrite;
-
-		return;
-	}
-}
-
-static void bs_sig_request_done(int fd, int events, void *data)
-{
-	int ret;
-	struct scsi_cmd *cmd;
-	uint64_t ev_count;
-	LIST_HEAD(list);
-
-	ret = read(fd, (char *)&ev_count, sizeof(ev_count));
-	if (ret <= 0) {
-		return;
-	}
-
-	pthread_mutex_lock(&finished_lock);
-	list_splice_init(&finished_list, &list);
-	pthread_mutex_unlock(&finished_lock);
-
-	while (!list_empty(&list)) {
-		cmd = list_first_entry(&list, struct scsi_cmd, bs_list);
-
-		list_del(&cmd->bs_list);
-
 		target_cmd_io_done(cmd, scsi_get_result(cmd));
 	}
 }
@@ -222,10 +134,7 @@ static void *bs_thread_worker_fn(void *arg)
 {
 	struct bs_thread_info *info = arg;
 	struct scsi_cmd *cmd;
-	sigset_t set;
-
-	sigfillset(&set);
-	sigprocmask(SIG_BLOCK, &set, NULL);
+	int empty;
 
 	while (1) {
 		pthread_mutex_lock(&info->pending_lock);
@@ -243,25 +152,22 @@ static void *bs_thread_worker_fn(void *arg)
 
 		info->request_fn(cmd);
 
-		pthread_mutex_lock(&finished_lock);
-		list_add_tail(&cmd->bs_list, &finished_list);
-		pthread_mutex_unlock(&finished_lock);
+		pthread_mutex_lock(&info->finished_lock);
+		empty = list_empty(&info->finished_list);
+		list_add_tail(&cmd->bs_list, &info->finished_list);
+		pthread_mutex_unlock(&info->finished_lock);
 
-		if (sig_fd < 0)
-			pthread_cond_signal(&finished_cond);
-		else {
-			uint64_t count = 1;
-			if (write(sig_fd, &count, sizeof(count)) == -1 && errno != EAGAIN)
-				eprintf("failed to write to sig_fd: %s\n", strerror(errno));
+		if (empty &&eventfd_write(info->sig_fd, 1) == -1 &&errno != EAGAIN) {
+			eprintf("failed to write to sig_fd: %s\n", strerror(errno));
+			abort();
 		}
 	}
 
 	pthread_exit(NULL);
 }
 
-static int bs_init_signalfd(void)
+static int bs_init_modules(void)
 {
-	sigset_t mask;
 	int ret;
 	DIR *dir;
 
@@ -309,101 +215,15 @@ static int bs_init_signalfd(void)
 		closedir(dir);
 	}
 
-	pthread_mutex_init(&finished_lock, NULL);
-
-//	sigemptyset(&mask);
-//	sigaddset(&mask, SIGUSR2);
-//	sigprocmask(SIG_BLOCK, &mask, NULL);
-
-	// This has problem with curve, signalfd is not safe in threaded progam,
-	// because you don't know which thread unmasked the signal. @yfxu
-	sig_fd = eventfd(0, O_NONBLOCK);
-	if (sig_fd < 0)
-		return 1;
-
-	ret = tgt_event_add(sig_fd, EPOLLIN, bs_sig_request_done, NULL);
-	if (ret < 0) {
-		close (sig_fd);
-		sig_fd = -1;
-
-		return 1;
-	}
-
 	return 0;
-}
-
-static int bs_init_notify_thread(void)
-{
-	int ret;
-
-	pthread_cond_init(&finished_cond, NULL);
-	pthread_mutex_init(&finished_lock, NULL);
-
-	ret = pipe(command_fd);
-	if (ret) {
-		eprintf("failed to create command pipe, %m\n");
-		goto destroy_cond_mutex;
-	}
-
-	ret = pipe(done_fd);
-	if (ret) {
-		eprintf("failed to done command pipe, %m\n");
-		goto close_command_fd;
-	}
-
-	ret = tgt_event_add(done_fd[0], EPOLLIN, bs_thread_request_done, NULL);
-	if (ret) {
-		eprintf("failed to add epoll event\n");
-		goto close_done_fd;
-	}
-
-	ret = pthread_create(&ack_thread, NULL, bs_thread_ack_fn, NULL);
-	if (ret) {
-		eprintf("failed to create an ack thread, %s\n", strerror(ret));
-		goto event_del;
-	}
-
-	ret = write(command_fd[1], &ret, sizeof(ret));
-	if (ret <= 0)
-		goto event_del;
-
-	return 0;
-event_del:
-	tgt_event_del(done_fd[0]);
-
-close_done_fd:
-	close(done_fd[0]);
-	close(done_fd[1]);
-close_command_fd:
-	close(command_fd[0]);
-	close(command_fd[1]);
-destroy_cond_mutex:
-	pthread_cond_destroy(&finished_cond);
-	pthread_mutex_destroy(&finished_lock);
-
-	return 1;
 }
 
 int bs_init(void)
 {
-	int ret;
-
-	ret = bs_init_signalfd();
-	if (!ret) {
-		eprintf("use signalfd notification\n");
-		return 0;
-	}
-
-	ret = bs_init_notify_thread();
-	if (!ret) {
-		eprintf("use pthread notification\n");
-		return 0;
-	}
-
-	return 1;
+	return bs_init_modules();
 }
 
-tgtadm_err bs_thread_open(struct bs_thread_info *info, request_func_t *rfn,
+tgtadm_err bs_thread_open(struct tgt_evloop *evloop, struct bs_thread_info *info, request_func_t *rfn,
 			  int nr_threads)
 {
 	int i, ret;
@@ -412,13 +232,19 @@ tgtadm_err bs_thread_open(struct bs_thread_info *info, request_func_t *rfn,
 	if (!info->worker_thread)
 		return TGTADM_NOMEM;
 
+	info->sig_fd = eventfd(0, O_NONBLOCK);
+	if (info->sig_fd < 0)
+		return TGTADM_UNKNOWN_ERR;
+	info->evloop = evloop;
+
 	eprintf("%d\n", nr_threads);
 	info->request_fn = rfn;
-
 	INIT_LIST_HEAD(&info->pending_list);
+	INIT_LIST_HEAD(&info->finished_list);
 
 	pthread_cond_init(&info->pending_cond, NULL);
 	pthread_mutex_init(&info->pending_lock, NULL);
+	pthread_mutex_init(&info->finished_lock, NULL);
 
 	for (i = 0; i < nr_threads; i++) {
 		ret = pthread_create(&info->worker_thread[i], NULL,
@@ -432,6 +258,10 @@ tgtadm_err bs_thread_open(struct bs_thread_info *info, request_func_t *rfn,
 		}
 	}
 	info->nr_worker_threads = nr_threads;
+	ret = tgt_event_insert(evloop, info->sig_fd, EPOLLIN, bs_thread_request_done, info);
+	if (ret) {
+		goto destroy_threads;
+	}
 
 	return TGTADM_SUCCESS;
 destroy_threads:
@@ -446,8 +276,12 @@ destroy_threads:
 
 	pthread_cond_destroy(&info->pending_cond);
 	pthread_mutex_destroy(&info->pending_lock);
+	pthread_mutex_destroy(&info->finished_lock);
 	free(info->worker_thread);
-
+	info->worker_thread = NULL;
+	close(info->sig_fd);
+	info->sig_fd = -1;
+	info->evloop = NULL;
 	return TGTADM_NOMEM;
 }
 
@@ -462,13 +296,21 @@ void bs_thread_close(struct bs_thread_info *info)
 
 	pthread_cond_destroy(&info->pending_cond);
 	pthread_mutex_destroy(&info->pending_lock);
+	pthread_mutex_destroy(&info->finished_lock);
 	free(info->worker_thread);
+	info->worker_thread = NULL;
+	close(info->sig_fd);
+	tgt_event_delete(info->evloop, info->sig_fd);
+	info->sig_fd = -1;
+	info->evloop = NULL;
 }
 
 int bs_thread_cmd_submit(struct scsi_cmd *cmd)
 {
 	struct scsi_lu *lu = cmd->dev;
 	struct bs_thread_info *info = BS_THREAD_I(lu);
+
+	set_cmd_async(cmd);
 
 	pthread_mutex_lock(&info->pending_lock);
 
@@ -477,8 +319,6 @@ int bs_thread_cmd_submit(struct scsi_cmd *cmd)
 	pthread_mutex_unlock(&info->pending_lock);
 
 	pthread_cond_signal(&info->pending_cond);
-
-	set_cmd_async(cmd);
 
 	return 0;
 }

@@ -2,6 +2,9 @@
 #define __TARGET_H__
 
 #include <limits.h>
+#include <pthread.h>
+
+#include "mutex.h"
 
 struct acl_entry {
 	char *address;
@@ -43,6 +46,12 @@ struct target {
 	struct tgt_account account;
 
 	struct list_head lld_siblings;
+
+	struct tgt_evloop *evloop;
+
+	pthread_t ev_td;
+
+	tgt_mutex_t mutex;
 };
 
 struct it_nexus {
@@ -84,12 +93,39 @@ static inline int queue_##name(const struct tgt_cmd_queue *q)		\
 	return ((q)->state & (1UL << TGT_QUEUE_##bit));			\
 }
 
-static inline int queue_active(const struct tgt_cmd_queue *q)		\
-{									\
-	return ((q)->active_cmd);					\
-}
-
 QUEUE_FNS(BLOCKED, blocked)
 QUEUE_FNS(DELETED, deleted)
+
+static inline int queue_active(const struct tgt_cmd_queue *q)
+{
+	return ((q)->active_cmd);
+}
+
+static inline void target_lock(struct target *t)
+{
+	mutex_lock(&t->mutex);
+}
+
+static inline void target_unlock(struct target *t)
+{
+	mutex_unlock(&t->mutex);
+}
+
+static inline int target_is_locked(struct target *t)
+{
+	return mutex_is_locked(&t->mutex);
+}
+
+static inline void target_assert_locked(struct target *t)
+{
+	mutex_assert_locked(&t->mutex);
+}
+
+static inline void target_assert_unlocked(struct target *t)
+{
+	mutex_assert_unlocked(&t->mutex);
+}
+
+struct target *target_lookup(int tid);
 
 #endif

@@ -44,6 +44,7 @@
 #include "tgtd.h"
 #include "scsi.h"
 #include "spc.h"
+#include "target.h"
 #include "tgtadm_error.h"
 
 #define BS_SG_RESVD_SZ  (512 * 1024)
@@ -230,7 +231,7 @@ static int bs_sg_cmd_submit(struct scsi_cmd *cmd)
 	return 0;
 }
 
-static void bs_bsg_cmd_complete(int fd, int events, void *data)
+static void bs_bsg_cmd_complete(struct tgt_evloop *evloop, int fd, int events, void *data)
 {
 	struct sg_io_v4 io_hdr;
 	struct scsi_cmd *cmd;
@@ -274,7 +275,7 @@ static void bs_bsg_cmd_complete(int fd, int events, void *data)
 	target_cmd_io_done(cmd, io_hdr.device_status);
 }
 
-static void bs_sg_cmd_complete(int fd, int events, void *data)
+static void bs_sg_cmd_complete(struct tgt_evloop *evloop, int fd, int events, void *data)
 {
 	struct sg_io_hdr io_hdr;
 	struct scsi_cmd *cmd;
@@ -433,7 +434,7 @@ static tgtadm_err bs_sg_init(struct scsi_lu *lu, char *bsopts)
 
 static int bs_sg_open(struct scsi_lu *lu, char *path, int *fd, uint64_t *size)
 {
-	void (*cmd_complete)(int, int, void *) = NULL;
+	void (*cmd_complete)(struct tgt_evloop *, int, int, void *) = NULL;
 	int sg_fd, err, bsg = 0;
 
 	bsg = chk_sg_device(path);
@@ -460,7 +461,7 @@ static int bs_sg_open(struct scsi_lu *lu, char *path, int *fd, uint64_t *size)
 		return err;
 	}
 
-	err = tgt_event_add(sg_fd, EPOLLIN, cmd_complete, NULL);
+	err = tgt_event_insert(lu->tgt->evloop, sg_fd, EPOLLIN, cmd_complete, NULL);
 	if (err) {
 		eprintf("Failed to add sg device event %s\n", path);
 		return err;

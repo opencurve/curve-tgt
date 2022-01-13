@@ -1,5 +1,6 @@
 typedef void (request_func_t) (struct scsi_cmd *);
 
+struct tgt_evloop;
 struct bs_thread_info {
 	pthread_t *worker_thread;
 	int nr_worker_threads;
@@ -11,7 +12,14 @@ struct bs_thread_info {
 	/* protected by pending_lock */
 	struct list_head pending_list;
 
+	pthread_mutex_t finished_lock;
+	struct list_head finished_list;
+
 	request_func_t *request_fn;
+
+	struct tgt_evloop *evloop;
+
+	int sig_fd;
 };
 
 static inline struct bs_thread_info *BS_THREAD_I(struct scsi_lu *lu)
@@ -19,7 +27,8 @@ static inline struct bs_thread_info *BS_THREAD_I(struct scsi_lu *lu)
 	return (struct bs_thread_info *) ((char *)lu + sizeof(*lu));
 }
 
-extern tgtadm_err bs_thread_open(struct bs_thread_info *info, request_func_t *rfn,
+extern tgtadm_err bs_thread_open(struct tgt_evloop *evloop,
+				 struct bs_thread_info *info, request_func_t *rfn,
 				 int nr_threads);
 extern void bs_thread_close(struct bs_thread_info *info);
 extern int bs_thread_cmd_submit(struct scsi_cmd *cmd);

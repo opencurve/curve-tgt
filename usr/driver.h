@@ -36,6 +36,9 @@ struct tgt_driver {
 
 	int (*transportid)(int, uint64_t, char *, int);
 
+	int (*init_evloop)(struct tgt_evloop *);
+	void (*fini_evloop)(struct tgt_evloop *);
+
 	const char *default_bst;
 
 	struct list_head target_list;

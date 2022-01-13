@@ -140,7 +140,7 @@ static int isns_get_ip(int fd)
 	return 0;
 }
 
-static void isns_handle(int fd, int events, void *data);
+static void isns_handle(struct tgt_evloop *evloop, int fd, int events, void *data);
 
 static int isns_connect(void)
 {
@@ -170,7 +170,7 @@ static int isns_connect(void)
 	}
 
 	isns_fd = fd;
-	tgt_event_add(fd, EPOLLIN, isns_handle, NULL);
+	tgt_event_insert(main_evloop, fd, EPOLLIN, isns_handle, NULL);
 
 	return fd;
 }
@@ -790,7 +790,7 @@ free_qry_mgmt:
 	free(mgmt);
 }
 
-static void isns_handle(int fd, int events, void *data)
+static void isns_handle(struct tgt_evloop *evloop, int fd, int events, void *data)
 {
 	int err;
 	struct isns_io *rx = &isns_rx;
@@ -803,7 +803,7 @@ static void isns_handle(int fd, int events, void *data)
 		if (err == -EAGAIN)
 			return;
 		dprintf("close connection %d\n", isns_fd);
-		tgt_event_del(isns_fd);
+		tgt_event_delete(evloop, isns_fd);
 		close(isns_fd);
 		isns_fd = 0;
 		return;
@@ -858,7 +858,7 @@ static void send_scn_rsp(char *name, uint16_t transaction)
 		eprintf("%d %m\n", length);
 }
 
-static void isns_scn_handle(int fd, int events, void *data)
+static void isns_scn_handle(struct tgt_evloop *evloop, int fd, int events, void *data)
 {
 	int err;
 	struct isns_io *rx = &scn_rx;
@@ -871,7 +871,7 @@ static void isns_scn_handle(int fd, int events, void *data)
 		if (err == -EAGAIN)
 			return;
 		dprintf("close connection %d\n", scn_fd);
-		tgt_event_del(scn_fd);
+		tgt_event_delete(evloop, scn_fd);
 		close(scn_fd);
 		scn_fd = 0;
 		return;
@@ -895,7 +895,7 @@ static void isns_scn_handle(int fd, int events, void *data)
 	return;
 }
 
-static void scn_accept_connection(int dummy, int events, void *data)
+static void scn_accept_connection(struct tgt_evloop *evloop, int dummy, int events, void *data)
 {
 	struct sockaddr_storage from;
 	socklen_t slen;
@@ -915,7 +915,7 @@ static void scn_accept_connection(int dummy, int events, void *data)
 	/* not critical, so ignore. */
 
 	scn_fd = fd;
-	tgt_event_add(scn_fd, EPOLLIN, isns_scn_handle, NULL);
+	tgt_event_insert(evloop, scn_fd, EPOLLIN, isns_scn_handle, NULL);
 
 	return;
 }
@@ -965,16 +965,14 @@ out:
 		close(fd);
 	else {
 		scn_listen_fd = fd;
-		tgt_event_add(fd, EPOLLIN, scn_accept_connection, NULL);
+		tgt_event_insert(main_evloop, fd, EPOLLIN, scn_accept_connection, NULL);
 	}
 
 	return err;
 }
 
-static void isns_timeout_fn(void *data)
+static void isns_timeout_fn(struct tgt_work *w)
 {
-	struct tgt_work *w = data;
-
 	isns_attr_query(NULL);
 	add_work(w, isns_timeout);
 }
@@ -1071,15 +1069,15 @@ void isns_exit(void)
 	}
 
 	if (isns_fd) {
-		tgt_event_del(isns_fd);
+		tgt_event_delete(main_evloop, isns_fd);
 		close(isns_fd);
 	}
 	if (scn_listen_fd) {
-		tgt_event_del(scn_listen_fd);
+		tgt_event_delete(main_evloop, scn_listen_fd);
 		close(scn_listen_fd);
 	}
 	if (scn_fd) {
-		tgt_event_del(scn_fd);
+		tgt_event_delete(main_evloop, scn_fd);
 		close(scn_fd);
 	}
 

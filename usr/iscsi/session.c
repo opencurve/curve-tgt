@@ -30,8 +30,6 @@
 #include "tgtd.h"
 #include "util.h"
 
-static LIST_HEAD(sessions_list);
-
 struct iscsi_session *session_find_name(int tid, const char *iname, uint8_t *isid)
 {
 	struct iscsi_session *session;
@@ -52,10 +50,16 @@ struct iscsi_session *session_find_name(int tid, const char *iname, uint8_t *isi
 	return NULL;
 }
 
-struct iscsi_session *session_lookup_by_tsih(uint16_t tsih)
+struct iscsi_session *session_lookup_by_tsih(int tid, uint16_t tsih)
 {
 	struct iscsi_session *session;
-	list_for_each_entry(session, &sessions_list, hlist) {
+	struct iscsi_target *target;
+
+	target = target_find_by_id(tid);
+	if (!target)
+		return NULL;
+
+	list_for_each_entry(session, &target->sessions_list, slist) {
 		if (session->tsih == tsih)
 			return session;
 	}
@@ -78,7 +82,7 @@ int session_create(struct iscsi_connection *conn)
 	for (tsih = last_tsih + 1; tsih != last_tsih; tsih++) {
 		if (!tsih)
 			continue;
-		session = session_lookup_by_tsih(tsih);
+		session = session_lookup_by_tsih(target->tid, tsih);
 		if (!session)
 			break;
 	}
@@ -147,7 +151,6 @@ int session_create(struct iscsi_connection *conn)
 
 	dprintf("session_create: %#" PRIx64 "\n", sid64(conn->isid, session->tsih));
 
-	list_add(&session->hlist, &sessions_list);
 	session->exp_cmd_sn = conn->exp_cmd_sn;
 
 	memcpy(session->session_param, conn->session_param,
@@ -171,8 +174,6 @@ static void session_destroy(struct iscsi_session *session)
 /* 		session->target->nr_sessions--; */
 		it_nexus_destroy(session->target->tid, session->tsih);
 	}
-
-	list_del(&session->hlist);
 
 	free(session->initiator);
 	free(session->initiator_alias);

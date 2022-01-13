@@ -39,6 +39,7 @@
 #include "tgtd.h"
 #include "scsi.h"
 #include "spc.h"
+#include "target.h"
 #include "bs_thread.h"
 
 static void cmd_error_sense(struct scsi_cmd *cmd, uint8_t key, uint16_t asc)
@@ -381,7 +382,7 @@ static tgtadm_err bs_rdwr_init(struct scsi_lu *lu, char *bsopts)
 {
 	struct bs_thread_info *info = BS_THREAD_I(lu);
 
-	return bs_thread_open(info, bs_rdwr_request, nr_iothreads);
+	return bs_thread_open(lu->tgt->evloop, info, bs_rdwr_request, nr_iothreads);
 }
 
 static void bs_rdwr_exit(struct scsi_lu *lu)

@@ -41,6 +41,7 @@
 #include "tgtadm.h"
 #include "parser.h"
 #include "spc.h"
+#include "work.h"
 
 static LIST_HEAD(device_type_list);
 
@@ -65,7 +66,7 @@ static struct device_type_template *device_type_lookup(int type)
 
 static LIST_HEAD(target_list);
 
-static struct target *target_lookup(int tid)
+struct target *target_lookup(int tid)
 {
 	struct target *target;
 	list_for_each_entry(target, &target_list, target_siblings)
@@ -524,7 +525,7 @@ tgtadm_err tgt_device_create(int tid, int dev_type, uint64_t lun, char *params,
 		adm_err = TGTADM_NO_TARGET;
 		goto out;
 	}
-
+	target_lock(target);
 	lu = device_lookup(target, lun);
 	if (lu) {
 		eprintf("device %" PRIu64 " already exists\n", lun);
@@ -704,6 +705,7 @@ out:
 		free(path);
 	if (bsoflags)
 		free(bsoflags);
+	target_unlock(target);
 	return adm_err;
 
 fail_bs_init:
@@ -735,8 +737,11 @@ tgtadm_err tgt_device_destroy(int tid, uint64_t lun, int force)
 		return TGTADM_NO_LUN;
 	}
 
-	if (!list_empty(&lu->cmd_queue.queue) || lu->cmd_queue.active_cmd)
+	target_lock(target);
+	if (!list_empty(&lu->cmd_queue.queue) || lu->cmd_queue.active_cmd) {
+		target_unlock(target);
 		return TGTADM_LUN_ACTIVE;
+	}
 
 	if (lu->dev_type_template.lu_exit)
 		lu->dev_type_template.lu_exit(lu);
@@ -784,6 +789,9 @@ tgtadm_err tgt_device_destroy(int tid, uint64_t lun, int force)
 		}
 	}
 
+	tgt_event_kick(target->evloop);
+
+	target_unlock(target);
 	return TGTADM_SUCCESS;
 }
 
@@ -944,8 +952,10 @@ tgtadm_err tgt_device_update(int tid, uint64_t dev_id, char *params)
 		return TGTADM_NO_LUN;
 	}
 
+	target_lock(target);
 	if (lu->dev_type_template.lu_config)
 		adm_err = lu->dev_type_template.lu_config(lu, params);
+	target_unlock(target);
 
 	return adm_err;
 }
@@ -2116,13 +2126,40 @@ char *tgt_targetname(int tid)
 	return target->name;
 }
 
+static void *target_ev_loop(void *arg)
+{
+	struct target *target = arg;
+	extern char *program_invocation_short_name;
+	char buf[128];
+	
+	snprintf(buf, sizeof(buf), "%s/%d", program_invocation_short_name, target->tid);
+	pthread_setname_np (pthread_self(), buf);
+	target_lock(target);
+	tgt_event_loop(target->evloop);
+	target_unlock(target);
+	return NULL;
+}
+
 #define DEFAULT_NR_ACCOUNT 16
+
+static void ev_target_lock(struct tgt_evloop *evloop)
+{
+	struct target *target = tgt_event_userdata(evloop, EV_DATA_TARGET);
+	mutex_lock(&target->mutex);
+}
+
+static void ev_target_unlock(struct tgt_evloop *evloop)
+{
+	struct target *target = tgt_event_userdata(evloop, EV_DATA_TARGET);
+	mutex_unlock(&target->mutex);
+}
 
 tgtadm_err tgt_target_create(int lld, int tid, char *args)
 {
 	struct target *target, *pos;
 	char *p, *q, *targetname = NULL;
 	struct backingstore_template *bst;
+	int is_iser;
 
 	p = args;
 	while ((q = strsep(&p, ","))) {
@@ -2160,6 +2197,8 @@ tgtadm_err tgt_target_create(int lld, int tid, char *args)
 		return TGTADM_TARGET_EXIST;
 	}
 
+	is_iser = (0 == strcmp(tgt_drivers[lld]->name, "iser"));
+
 	bst = get_backingstore_template(tgt_drivers[lld]->default_bst);
 	if (!bst)
 		return TGTADM_INVALID_REQUEST;
@@ -2191,6 +2230,32 @@ tgtadm_err tgt_target_create(int lld, int tid, char *args)
 	target->target_state = SCSI_TARGET_READY;
 	target->lid = lld;
 
+	if (is_iser) {
+		target->evloop = main_evloop;
+	} else {
+		target->evloop = tgt_new_evloop();
+		if (target->evloop == NULL) {
+			eprintf("Target %s can not create evloop\n", targetname);
+			free(target->name);
+			free(target->account.in_aids);
+			free(target);
+			return TGTADM_NOMEM;
+		}
+
+		tgt_event_set_userdata(target->evloop, EV_DATA_TARGET, target);
+
+		tgt_event_set_loop_release_cb(target->evloop, ev_target_unlock, ev_target_lock);
+
+		if (work_timer_start(target->evloop)){
+			free(target->name);
+			free(target->account.in_aids);
+			free(target);
+			return TGTADM_UNKNOWN_ERR;
+		}
+
+		lld_init_evloop(target->evloop);
+	}
+
 	list_for_each_entry(pos, &target_list, target_siblings)
 		if (target->tid < pos->tid)
 			break;
@@ -2208,11 +2273,19 @@ tgtadm_err tgt_target_create(int lld, int tid, char *args)
 
 	list_add_tail(&target->lld_siblings, &tgt_drivers[lld]->target_list);
 
+	if (target->evloop != main_evloop &&
+	    pthread_create(&target->ev_td, NULL, target_ev_loop, target)) {
+		eprintf("can not create evloop thread for target %s\n", targetname);
+		target->ev_td = 0;
+		tgt_target_destroy(lld, tid, 1);
+	}
+
 	dprintf("Succeed to create a new target %d\n", tid);
 
 	return TGTADM_SUCCESS;
 }
 
+/* called by mgmt */
 tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 {
 	struct target *target;
@@ -2221,12 +2294,18 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 	struct scsi_lu *lu;
 	tgtadm_err adm_err;
 
+	eprintf("target destroy\n");
+
 	target = target_lookup(tid);
 	if (!target)
 		return TGTADM_NO_TARGET;
 
+	/* called by mgmt not from target event loop thread, so we can lock target here */
+	target_lock(target);
+
 	if (!force && !list_empty(&target->it_nexus_list)) {
 		eprintf("target %d still has it nexus\n", tid);
+		target_unlock(target);
 		return TGTADM_TARGET_ACTIVE;
 	}
 
@@ -2235,8 +2314,10 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 		lu = list_entry(target->device_list.prev, struct scsi_lu,
 				device_siblings);
 		adm_err = tgt_device_destroy(tid, lu->lun, 1);
-		if (adm_err != TGTADM_SUCCESS)
+		if (adm_err != TGTADM_SUCCESS) {
+			target_unlock(target);
 			return adm_err;
+		}
 	}
 
 	if (tgt_drivers[lld_no]->target_destroy)
@@ -2259,6 +2340,21 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 
 	list_del(&target->lld_siblings);
 
+	target_unlock(target);
+
+	if (target->evloop != main_evloop) {
+		tgt_event_stop(target->evloop);
+		if (target->ev_td != 0)
+			pthread_join(target->ev_td, NULL);
+
+		work_timer_stop(target->evloop);
+
+		lld_fini_evloop(target->evloop);
+
+		tgt_destroy_evloop(target->evloop);
+	}
+
+	mutex_destroy(&target->mutex);
 	free(target->account.in_aids);
 	free(target->name);
 	free(target);

@@ -268,7 +268,7 @@ static void bs_curve_aio_callback(struct NebdClientAioContext* curve_ctx)
 	free(iocb);
 }
 
-static void bs_curve_get_completions(int fd, int events, void *data)
+static void bs_curve_get_completions(struct tgt_evloop* evloop, int fd, int events, void *data)
 {
 	struct bs_curve_info *info = data;
 	struct list_head temp_list;
@@ -543,7 +543,7 @@ static int bs_curve_open(struct scsi_lu *lu, char *path, int *fd, uint64_t *size
 	dprintf("eventfd:%d for tgt:%d lun:%"PRId64 "\n",
 		afd, info->lu->tgt->tid, info->lu->lun);
 
-	ret = tgt_event_add(afd, EPOLLIN, bs_curve_get_completions, info);
+	ret = tgt_event_insert(lu->tgt->evloop, afd, EPOLLIN, bs_curve_get_completions, info);
 	if (ret)
 		goto close_eventfd;
 	info->evt_fd = afd;
@@ -562,7 +562,7 @@ static int bs_curve_open(struct scsi_lu *lu, char *path, int *fd, uint64_t *size
 	return 0;
 
 delete_event:
-	tgt_event_del(afd);
+	tgt_event_delete(lu->tgt->evloop, afd);
 close_eventfd:
 	close(afd);
 	info->evt_fd = -1;
@@ -582,7 +582,7 @@ static void bs_curve_close(struct scsi_lu *lu)
 		info->curve_fd = -1;
 	}
 	if (info->evt_fd >= 0) {
-		tgt_event_del(info->evt_fd);
+		tgt_event_delete(lu->tgt->evloop, info->evt_fd);
 		info->evt_fd = -1;
 	}
 }
