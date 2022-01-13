@@ -40,6 +40,7 @@
 #include "scsi.h"
 #include "tgtadm.h"
 #include "crc32c.h"
+#include "target.h"
 
 int default_nop_interval;
 int default_nop_count;
@@ -589,7 +590,21 @@ static void login_finish(struct iscsi_connection *conn)
 			goto fail;
 		}
 		if (!conn->session) {
-			ret = session_create(conn);
+			struct target *target = target_lookup(conn->tid);
+			if (!target)
+				ret = -EINVAL;
+			else {
+				target_lock(target);
+				ret = session_create(conn);
+				if (ret == 0) {
+					if (target->evloop != main_evloop)
+						conn->migrate_to = target;
+					else
+						target_unlock(target);
+				} else {
+					target_unlock(target);
+				}
+			}
 			if (ret) {
 				class = ISCSI_STATUS_CLS_TARGET_ERR;
 				detail = ISCSI_LOGIN_STATUS_TARGET_ERROR;
@@ -603,6 +618,12 @@ static void login_finish(struct iscsi_connection *conn)
 				class = ISCSI_STATUS_CLS_INITIATOR_ERR;
 				detail =ISCSI_LOGIN_STATUS_INVALID_REQUEST;
 				goto fail;
+			}
+
+			struct target *target = target_lookup(conn->tid);
+			if (target->evloop != main_evloop) {
+				target_lock(target);
+				conn->migrate_to = target;
 			}
 		}
 		memcpy(conn->isid, conn->session->isid, sizeof(conn->isid));
@@ -1882,7 +1903,7 @@ static int iscsi_noop_out_tx_start(struct iscsi_task *task, int *is_rsp)
 		*is_rsp = 0;
 
 		if (conn->tp->ep_nop_reply)
-			conn->tp->ep_nop_reply(be32_to_cpu(task->req.ttt));
+			conn->tp->ep_nop_reply(conn->evloop, be32_to_cpu(task->req.ttt));
 
 		iscsi_free_task(task);
 	} else {
@@ -2411,7 +2432,7 @@ int iscsi_transportid(int tid, uint64_t itn_id, char *buf, int size)
 	char *p;
 	uint16_t len;
 
-	session = session_lookup_by_tsih(itn_id);
+	session = session_lookup_by_tsih(tid, itn_id);
 	if (!session)
 		return 0;
 
@@ -2542,6 +2563,8 @@ static struct tgt_driver iscsi = {
 	.cmd_end_notify		= iscsi_scsi_cmd_done,
 	.mgmt_end_notify	= iscsi_tm_done,
 	.transportid		= iscsi_transportid,
+	.init_evloop		= iscsi_init_evloop,
+	.fini_evloop		= iscsi_fini_evloop,
 	.default_bst		= "rdwr",
 };
 

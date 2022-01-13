@@ -38,6 +38,7 @@
 #include "media.h"
 #include "bs_ssc.h"
 #include "ssc.h"
+#include "target.h"
 #include "libssc.h"
 
 #define SENSE_FILEMARK	0x80
@@ -611,7 +612,7 @@ static void tape_rdwr_request(struct scsi_cmd *cmd)
 static tgtadm_err bs_ssc_init(struct scsi_lu *lu, char *bsopts)
 {
 	struct bs_thread_info *info = BS_THREAD_I(lu);
-	return bs_thread_open(info, tape_rdwr_request, 1);
+	return bs_thread_open(lu->tgt->evloop, info, tape_rdwr_request, 1);
 }
 
 static int bs_ssc_open(struct scsi_lu *lu, char *path, int *fd, uint64_t *size)

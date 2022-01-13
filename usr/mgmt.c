@@ -611,13 +611,13 @@ static int mtask_received(struct mgmt_task *mtask, int fd)
 	/* whatever the result of mtask execution, a response is sent */
 	mtask->mtask_state = MTASK_STATE_HDR_SEND;
 	mtask->done = 0;
-	err = tgt_event_modify(fd, EPOLLOUT);
+	err = tgt_event_change(main_evloop, fd, EPOLLOUT);
 	if (err)
 		eprintf("failed to modify mgmt task event out\n");
 	return err;
 }
 
-static void mtask_recv_send_handler(int fd, int events, void *data)
+static void mtask_recv_send_handler(struct tgt_evloop *evloop, int fd, int events, void *data)
 {
 	int err, len;
 	char *p;
@@ -713,12 +713,12 @@ static void mtask_recv_send_handler(int fd, int events, void *data)
 out:
 	if (req->mode == MODE_SYSTEM && req->op == OP_DELETE && !rsp->err)
 		system_active = 0;
-	tgt_event_del(fd);
+	tgt_event_delete(evloop, fd);
 	close(fd);
 	mtask_free(mtask);
 }
 
-static void mgmt_event_handler(int accept_fd, int events, void *data)
+static void mgmt_event_handler(struct tgt_evloop *evloop, int accept_fd, int events, void *data)
 {
 	int fd, err;
 	struct mgmt_task *mtask;
@@ -745,7 +745,7 @@ static void mgmt_event_handler(int accept_fd, int events, void *data)
 	if (!mtask)
 		goto out;
 
-	err = tgt_event_add(fd, EPOLLIN, mtask_recv_send_handler, mtask);
+	err = tgt_event_insert(evloop, fd, EPOLLIN, mtask_recv_send_handler, mtask);
 	if (err) {
 		eprintf("failed to add a socket to epoll %d\n", fd);
 		mtask_free(mtask);
@@ -807,7 +807,7 @@ int ipc_init(void)
 		goto close_ipc_fd;
 	}
 
-	err = tgt_event_add(fd, EPOLLIN, mgmt_event_handler, NULL);
+	err = tgt_event_insert(main_evloop, fd, EPOLLIN, mgmt_event_handler, NULL);
 	if (err)
 		goto close_ipc_fd;
 
@@ -824,7 +824,7 @@ close_lock_fd:
 
 void ipc_exit(void)
 {
-	tgt_event_del(ipc_fd);
+	tgt_event_delete(main_evloop, ipc_fd);
 	close(ipc_fd);
 	close(ipc_lock_fd);
 }

@@ -41,6 +41,7 @@
 #include "util.h"
 #include "log.h"
 #include "scsi.h"
+#include "target.h"
 #include "bs_thread.h"
 
 #define SD_PROTO_VER 0x01
@@ -1402,7 +1403,7 @@ static tgtadm_err bs_sheepdog_init(struct scsi_lu *lu, char *bsopts)
 	pthread_rwlock_init(&ai->fd_list_lock, NULL);
 	pthread_rwlock_init(&ai->inode_lock, NULL);
 
-	return bs_thread_open(info, bs_sheepdog_request, nr_iothreads);
+	return bs_thread_open(lu->tgt->evloop, info, bs_sheepdog_request, nr_iothreads);
 }
 
 static void bs_sheepdog_exit(struct scsi_lu *lu)

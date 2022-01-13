@@ -33,10 +33,12 @@
 #include <ctype.h>
 #include <sys/resource.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <poll.h>
+#include <pthread.h>
 
 #include "list.h"
 #include "tgtd.h"
@@ -49,16 +51,9 @@ unsigned long pagesize, pageshift;
 
 int system_active = 1;
 static char program_name[] = "tgtd";
-
-RB_HEAD(ev_list, event_data);
-struct tgt_events_loop {
-	struct ev_list root;
-	int ep_fd;
-} main_evloop;
+struct tgt_evloop *main_evloop;
 
 RB_PROTOTYPE(ev_list, event_data, e_node,);
-
-static LIST_HEAD(tgt_sched_events_list);
 
 static struct option const long_options[] = {
 	{"foreground", no_argument, 0, 'f'},
@@ -203,7 +198,7 @@ static int event_insert(struct ev_list *list, struct event_data *ev)
 	return tmp == NULL;
 }
 
-int tgt_event_add(int fd, int events, event_handler_t handler, void *data)
+int tgt_event_insert(struct tgt_evloop *evloop, int fd, int events, event_handler_t handler, void *data)
 {
 	struct epoll_event ev;
 	struct event_data *tev;
@@ -216,54 +211,55 @@ int tgt_event_add(int fd, int events, event_handler_t handler, void *data)
 	tev->data = data;
 	tev->handler = handler;
 	tev->fd = fd;
+	tev->events = events;
 
 	memset(&ev, 0, sizeof(ev));
 	ev.events = events;
 	ev.data.ptr = tev;
-	err = epoll_ctl(main_evloop.ep_fd, EPOLL_CTL_ADD, fd, &ev);
+	err = epoll_ctl(evloop->ep_fd, EPOLL_CTL_ADD, fd, &ev);
 	if (err) {
 		eprintf("Cannot add fd, %m\n");
 		free(tev);
 	} else
-		event_insert(&main_evloop.root, tev);
+		event_insert(&evloop->root, tev);
 
 	return err;
 }
 
-static struct event_data *tgt_event_lookup(int fd)
+static struct event_data *tgt_event_lookup(struct tgt_evloop *evloop, int fd)
 {
-	return ev_list_RB_LOOKUP(&main_evloop.root, fd);
+	return ev_list_RB_LOOKUP(&evloop->root, fd);
 }
 
-static int event_need_refresh;
-
-void tgt_event_del(int fd)
+void tgt_event_delete(struct tgt_evloop *evloop, int fd)
 {
 	struct event_data *tev;
 	int ret;
 
-	tev = tgt_event_lookup(fd);
+	tev = tgt_event_lookup(evloop, fd);
 	if (!tev) {
 		eprintf("Cannot find event %d\n", fd);
+		abort();
 		return;
 	}
 
-	ret = epoll_ctl(main_evloop.ep_fd, EPOLL_CTL_DEL, fd, NULL);
+	ret = epoll_ctl(evloop->ep_fd, EPOLL_CTL_DEL, fd, NULL);
 	if (ret < 0)
 		eprintf("fail to remove epoll event, %s\n", strerror(errno));
 
-	ev_list_RB_REMOVE(&main_evloop.root, tev);
+	ev_list_RB_REMOVE(&evloop->root, tev);
 	free(tev);
 
-	event_need_refresh = 1;
+	evloop->event_need_refresh = 1;
 }
 
-int tgt_event_modify(int fd, int events)
+int tgt_event_change(struct tgt_evloop *evloop, int fd, int events)
 {
 	struct epoll_event ev;
 	struct event_data *tev;
+	int ret;
 
-	tev = tgt_event_lookup(fd);
+	tev = tgt_event_lookup(evloop, fd);
 	if (!tev) {
 		eprintf("Cannot find event %d\n", fd);
 		return -EINVAL;
@@ -273,7 +269,37 @@ int tgt_event_modify(int fd, int events)
 	ev.events = events;
 	ev.data.ptr = tev;
 
-	return epoll_ctl(main_evloop.ep_fd, EPOLL_CTL_MOD, fd, &ev);
+	ret = epoll_ctl(evloop->ep_fd, EPOLL_CTL_MOD, fd, &ev);
+	if (!ret)
+		tev->events = events;
+	return ret;
+}
+
+int tgt_event_migrate(int fd, struct tgt_evloop *old, struct tgt_evloop *new)
+{
+	struct event_data ev, *evp;
+
+	evp = tgt_event_lookup(old, fd);
+	if (evp == NULL)
+		return -EINVAL;
+
+	ev = *evp;
+	tgt_event_delete(old, fd);
+
+	return tgt_event_insert(new, fd, ev.events, ev.handler, ev.data);
+}
+
+int tgt_event_get(struct tgt_evloop *evloop, int fd)
+{
+	struct event_data *tev;
+
+	tev = tgt_event_lookup(evloop, fd);
+	if (!tev) {
+		eprintf("Cannot find event %d\n", fd);
+		return 0;
+	}
+
+	return tev->events;
 }
 
 void tgt_init_sched_event(struct event_data *evt,
@@ -285,13 +311,23 @@ void tgt_init_sched_event(struct event_data *evt,
 	INIT_LIST_HEAD(&evt->e_list);
 }
 
-void tgt_add_sched_event(struct event_data *evt)
+void tgt_append_sched_event(struct tgt_evloop *evloop, struct event_data *evt)
 {
 	if (!evt->scheduled) {
 		evt->scheduled = 1;
-		list_add_tail(&evt->e_list, &tgt_sched_events_list);
+		int empty = list_empty(&evloop->sched_events_list);
+		list_add_tail(&evt->e_list, &evloop->sched_events_list);
+		if (empty)
+			eventfd_write(evloop->async_fd, 1);
 	}
 }
+
+/*
+void tgt_add_sched_event(struct event_data *evt)
+{
+	tgt_append_sched_event(main_evloop, evt);
+}
+*/
 
 void tgt_remove_sched_event(struct event_data *evt)
 {
@@ -409,39 +445,48 @@ int call_program(const char *cmd, void (*callback)(void *data, int result),
 	return 0;
 }
 
-static int tgt_exec_scheduled(void)
+static int tgt_exec_scheduled(struct tgt_evloop *evloop)
 {
 	struct list_head *last_sched;
 	struct event_data *tev, *tevn;
 	int work_remains = 0;
 
-	if (!list_empty(&tgt_sched_events_list)) {
+	if (!list_empty(&evloop->sched_events_list)) {
 		/* execute only work scheduled till now */
-		last_sched = tgt_sched_events_list.prev;
-		list_for_each_entry_safe(tev, tevn, &tgt_sched_events_list,
+		last_sched = evloop->sched_events_list.prev;
+		list_for_each_entry_safe(tev, tevn, &evloop->sched_events_list,
 					 e_list) {
 			tgt_remove_sched_event(tev);
 			tev->sched_handler(tev);
 			if (&tev->e_list == last_sched)
 				break;
 		}
-		if (!list_empty(&tgt_sched_events_list))
+		if (!list_empty(&evloop->sched_events_list))
 			work_remains = 1;
 	}
 	return work_remains;
 }
 
-static void event_loop(void)
+void tgt_event_loop(struct tgt_evloop *evloop)
 {
 	int nevent, i, sched_remains, timeout;
 	struct epoll_event events[1024];
 	struct event_data *tev;
 
 retry:
-	sched_remains = tgt_exec_scheduled();
+	sched_remains = tgt_exec_scheduled(evloop);
 	timeout = sched_remains ? 0 : -1;
 
-	nevent = epoll_wait(main_evloop.ep_fd, events, ARRAY_SIZE(events), timeout);
+	if (evloop->release)
+		evloop->release(evloop);
+	nevent = epoll_wait(evloop->ep_fd, events, ARRAY_SIZE(events), timeout);
+	if (evloop->acquire)
+		evloop->acquire(evloop);
+	if (evloop->event_need_refresh) {
+		evloop->event_need_refresh = 0;
+		goto next;
+	}
+
 	if (nevent < 0) {
 		if (errno != EINTR) {
 			eprintf("%m\n");
@@ -450,17 +495,36 @@ retry:
 	} else if (nevent) {
 		for (i = 0; i < nevent; i++) {
 			tev = (struct event_data *) events[i].data.ptr;
-			tev->handler(tev->fd, events[i].events, tev->data);
+			if (tev != &evloop->async_event)
+				tev->handler(evloop, tev->fd, events[i].events, tev->data);
+			else {
+				printf("async event\n");
+				eventfd_t value;
+				eventfd_read(evloop->async_fd, &value);
+			}
 
-			if (event_need_refresh) {
-				event_need_refresh = 0;
-				goto retry;
+			if (evloop->event_need_refresh) {
+				evloop->event_need_refresh = 0;
+				goto next;
 			}
 		}
 	}
 
-	if (system_active)
+next:
+	if (!evloop->stop && system_active)
 		goto retry;
+	eprintf("exit\n");
+}
+
+void tgt_event_stop(struct tgt_evloop *evloop)
+{
+	evloop->stop = 1;
+	eventfd_write(evloop->async_fd, 1);
+}
+
+void tgt_event_kick(struct tgt_evloop *evloop)
+{
+	eventfd_write(evloop->async_fd, 1);
 }
 
 int lld_init_one(int lld_index)
@@ -498,6 +562,41 @@ static void lld_exit(void)
 		if (tgt_drivers[i]->exit)
 			tgt_drivers[i]->exit();
 		tgt_drivers[i]->drv_state = DRIVER_EXIT;
+	}
+}
+
+static int lld_init_evloop_one(int lld_index, struct tgt_evloop *evloop)
+{
+	int err;
+
+	if (tgt_drivers[lld_index]->init_evloop) {
+		err = tgt_drivers[lld_index]->init_evloop(evloop);
+		if (err) {
+			//tgt_drivers[lld_index]->drv_state = DRIVER_ERR;
+			//return err;
+		}
+	}
+	return 0;
+}
+
+int lld_init_evloop(struct tgt_evloop *evloop)
+{
+	int i, nr;
+
+	for (i = nr = 0; tgt_drivers[i]; i++) {
+		if (!lld_init_evloop_one(i, evloop))
+			nr++;
+	}
+	return nr;
+}
+
+void lld_fini_evloop(struct tgt_evloop *evloop)
+{
+	int i;
+
+	for (i = 0; tgt_drivers[i]; i++) {
+		if (tgt_drivers[i]->fini_evloop)
+			tgt_drivers[i]->fini_evloop(evloop);
 	}
 }
 
@@ -539,14 +638,90 @@ static int parse_params(char *name, char *p)
 	return -1;
 }
 
-static void init_event_loop(void)
+struct tgt_evloop *tgt_new_evloop(void)
 {
-	RB_INIT(&main_evloop.root);
-	main_evloop.ep_fd = epoll_create(4096);
-	if (main_evloop.ep_fd < 0) {
-		fprintf(stderr, "can't create epoll fd, %m\n");
-		exit(1);
+	struct epoll_event ev;
+	struct tgt_evloop *evloop;
+	int err;
+
+	evloop = calloc(1, sizeof(*evloop));
+	if (evloop == NULL) {
+		fprintf(stderr, "can't malloc evloop, %m\n");
+		return NULL;
 	}
+
+	RB_INIT(&evloop->root);
+	INIT_LIST_HEAD(&evloop->sched_events_list);
+	evloop->ep_fd = epoll_create(4096);
+	if (evloop->ep_fd < 0) {
+		fprintf(stderr, "can't create epoll fd, %m\n");
+		free(evloop);
+		return NULL;
+	}
+	evloop->async_fd = eventfd(0, EFD_CLOEXEC|EFD_NONBLOCK);
+	if (evloop->async_fd < 0) {
+		fprintf(stderr, "can't create async ev fd, %m\n");
+		close(evloop->async_fd);
+		goto close_ep_fd;
+	}
+
+	memset(&ev, 0, sizeof(ev));
+	ev.events   = EPOLLIN;
+	ev.data.ptr = &evloop->async_event;
+	err = epoll_ctl(evloop->ep_fd, EPOLL_CTL_ADD, evloop->async_fd, &ev);
+	if (err) {
+		fprintf(stderr, "can't add async ev fd, %m\n");
+		goto close_async_fd;
+	}
+
+	return evloop;
+
+close_async_fd:
+	close(evloop->async_fd);
+close_ep_fd:
+	close(evloop->ep_fd);
+	free(evloop);
+	return NULL;
+}
+
+void tgt_destroy_evloop(struct tgt_evloop *evloop)
+{
+	int err;
+
+	err = epoll_ctl(evloop->ep_fd, EPOLL_CTL_DEL, evloop->async_fd, NULL);
+	if (err) {
+		fprintf(stderr, "can not EPOLL_CTL_DEL async fd");
+	}
+	close(evloop->ep_fd);
+	close(evloop->async_fd);
+	if (!RB_EMPTY(&evloop->root))
+		fprintf(stderr, "destroy evloop with non-empty evlist\n");
+	free(evloop);
+}
+
+void tgt_event_set_loop_release_cb(struct tgt_evloop *evloop,
+        void (*release)(struct tgt_evloop *), void (*acquire)(struct tgt_evloop *))
+{
+	evloop->acquire = acquire;
+	evloop->release = release;
+}
+
+void *tgt_event_userdata(struct tgt_evloop *evloop, int idx)
+{
+	if ((unsigned)idx >= sizeof(evloop->userdata) / sizeof(evloop->userdata[0])) {
+		eprintf("out of uesrdata range\n");
+		abort();
+	}
+	return evloop->userdata[idx];
+}
+
+void *tgt_event_set_userdata(struct tgt_evloop *evloop, int idx, void *data)
+{
+	if ((unsigned)idx >= sizeof(evloop->userdata) / sizeof(evloop->userdata[0])) {
+		eprintf("out of uesrdata range\n");
+		abort();
+	}
+	return evloop->userdata[idx] = data;
 }
 
 int main(int argc, char **argv)
@@ -609,18 +784,24 @@ int main(int argc, char **argv)
 		}
 	}
 
-	init_event_loop();
-
 	spare_args = optind < argc ? argv[optind] : NULL;
 
 	if (is_daemon && daemon(0, 0))
 		exit(1);
 
-	err = ipc_init();
+	err = log_init(program_name, LOG_SPACE_SIZE, is_daemon, is_debug);
 	if (err)
 		exit(1);
 
-	err = log_init(program_name, LOG_SPACE_SIZE, is_daemon, is_debug);
+	main_evloop = tgt_new_evloop();
+	if (main_evloop == NULL)
+		exit(1);
+
+	err = work_timer_start(main_evloop);
+	if (err)
+		exit(1);
+
+	err = ipc_init();
 	if (err)
 		exit(1);
 
@@ -630,15 +811,13 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
+	lld_init_evloop(main_evloop);
+
 	err = oom_adjust();
 	if (err)
 		exit(1);
 
 	err = nr_file_adjust();
-	if (err)
-		exit(1);
-
-	err = work_timer_start();
 	if (err)
 		exit(1);
 
@@ -648,13 +827,15 @@ int main(int argc, char **argv)
 	sd_notify(0, "READY=1\nSTATUS=Starting event loop...");
 #endif
 
-	event_loop();
+	tgt_event_loop(main_evloop);
+
+	lld_fini_evloop(main_evloop);
 
 	lld_exit();
 
-	work_timer_stop();
-
 	ipc_exit();
+
+	work_timer_stop(main_evloop);
 
 	log_close();
 

@@ -524,7 +524,7 @@ static tgtadm_err bs_glfs_init(struct scsi_lu *lu, char *bsopts)
 	GFSP(lu)->logfile = logfile;
 	GFSP(lu)->loglevel = loglevel;
 
-	return bs_thread_open(info, bs_glfs_request, nr_iothreads);
+	return bs_thread_open(lu->tgt->evloop, info, bs_glfs_request, nr_iothreads);
 }
 
 static void bs_glfs_exit(struct scsi_lu *lu)

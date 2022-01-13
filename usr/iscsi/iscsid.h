@@ -74,9 +74,6 @@ struct iscsi_session {
 	/* linked to target->sessions_list */
 	struct list_head slist;
 
-	/* linked to sessions_list */
-	struct list_head hlist;
-
 	char *initiator;
 	char *initiator_alias;
 	struct iscsi_target *target;
@@ -207,6 +204,10 @@ struct iscsi_connection {
 	struct iscsi_transport *tp;
 
 	struct iscsi_stats stats;
+
+	struct tgt_evloop *evloop;
+
+	struct target *migrate_to;
 };
 
 #define STATE_FREE		0
@@ -343,7 +344,7 @@ extern void iscsi_free_cmd_task(struct iscsi_task *task);
 
 /* session.c */
 extern struct iscsi_session *session_find_name(int tid, const char *iname, uint8_t *isid);
-extern struct iscsi_session *session_lookup_by_tsih(uint16_t tsih);
+extern struct iscsi_session *session_lookup_by_tsih(int tid, uint16_t tsih);
 extern int session_create(struct iscsi_connection *conn);
 extern void session_get(struct iscsi_session *session);
 extern void session_put(struct iscsi_session *session);
@@ -371,6 +372,9 @@ extern int param_index_by_name(char *name, struct iscsi_key *keys);
 /* transport.c */
 extern int iscsi_init(int, char *);
 extern void iscsi_exit(void);
+
+extern int iscsi_init_evloop(struct tgt_evloop *);
+extern void iscsi_fini_evloop(struct tgt_evloop *);
 
 /* isns.c */
 extern int isns_init(void);

@@ -261,7 +261,7 @@ static void bs_aio_complete_one(struct io_event *ep)
 	target_cmd_io_done(cmd, result);
 }
 
-static void bs_aio_get_completions(int fd, int events, void *data)
+static void bs_aio_get_completions(struct tgt_evloop *evloop, int fd, int events, void *data)
 {
 	struct bs_aio_info *info = data;
 	int i, ret;

@@ -111,11 +111,13 @@ static void iser_login_rx(struct iser_task *task);
 
 static int iser_device_init(struct iser_device *dev);
 
-static void iser_handle_cq_event(int fd __attribute__ ((unused)),
+static void iser_handle_cq_event(struct tgt_evloop *evloop,
+				 int fd __attribute__ ((unused)),
 				 int events __attribute__ ((unused)),
 				 void *data);
 
-static void iser_handle_async_event(int fd __attribute__ ((unused)),
+static void iser_handle_async_event(struct tgt_evloop *evloop,
+				    int fd __attribute__ ((unused)),
 				    int events __attribute__ ((unused)),
 				    void *data);
 
@@ -131,7 +133,7 @@ static inline void schedule_task_iosubmit(struct iser_task *task,
 					  struct iser_conn *conn)
 {
 	list_add_tail(&task->exec_list, &conn->iosubmit_list);
-	tgt_add_sched_event(&conn->sched_iosubmit);
+	tgt_append_sched_event(main_evloop, &conn->sched_iosubmit);
 
 	dprintf("task:%p tag:0x%04"PRIx64 " cmdsn:0x%x\n",
 		task, task->tag, task->cmd_sn);
@@ -141,7 +143,7 @@ static inline void schedule_rdma_read(struct iser_task *task,
 				      struct iser_conn *conn)
 {
 	list_add_tail(&task->rdma_list, &conn->rdma_rd_list);
-	tgt_add_sched_event(&conn->sched_rdma_rd);
+	tgt_append_sched_event(main_evloop, &conn->sched_rdma_rd);
 
 	dprintf("task:%p tag:0x%04"PRIx64 " cmdsn:0x%x\n",
 		task, task->tag, task->cmd_sn);
@@ -151,7 +153,7 @@ static inline void schedule_resp_tx(struct iser_task *task,
 				    struct iser_conn *conn)
 {
 	list_add_tail(&task->tx_list, &conn->resp_tx_list);
-	tgt_add_sched_event(&conn->sched_tx);
+	tgt_append_sched_event(main_evloop, &conn->sched_tx);
 
 	dprintf("task:%p tag:0x%04"PRIx64 " cmdsn:0x%x\n",
 		task, task->tag, task->cmd_sn);
@@ -161,7 +163,7 @@ static inline void schedule_post_recv(struct iser_task *task,
 				      struct iser_conn *conn)
 {
 	list_add_tail(&task->recv_list, &conn->post_recv_list);
-	tgt_add_sched_event(&conn->sched_post_recv);
+	tgt_append_sched_event(main_evloop, &conn->sched_post_recv);
 
 	dprintf("task:%p tag:0x%04"PRIx64 " cmdsn:0x%x\n",
 		task, task->tag, task->cmd_sn);
@@ -796,7 +798,7 @@ static void iser_task_free_rdma_buf(struct iser_task *task, struct iser_membuf *
 	iser_dev_free_rdma_buf(dev, rdma_buf);
 	if (unlikely(dev->waiting_for_mem)) {
 		dev->waiting_for_mem = 0;
-		tgt_add_sched_event(&conn->sched_buf_alloc);
+		tgt_append_sched_event(main_evloop, &conn->sched_buf_alloc);
 	}
 }
 
@@ -1385,7 +1387,7 @@ void iser_conn_put(struct iser_conn *conn)
 	dprintf("refcnt:%d\n", conn->h.refcount);
 	if (unlikely(conn->h.refcount == 0)) {
 		assert(conn->h.state == STATE_CLOSE);
-		tgt_add_sched_event(&conn->sched_conn_free);
+		tgt_append_sched_event(main_evloop, &conn->sched_conn_free);
 	}
 }
 
@@ -1655,7 +1657,8 @@ static void iser_cm_timewait_exit(struct rdma_cm_event *ev)
 /*
  * Handle RDMA CM events.
  */
-static void iser_handle_rdmacm(int fd __attribute__ ((unused)),
+static void iser_handle_rdmacm(struct tgt_evloop *evloop,
+			       int fd __attribute__ ((unused)),
 			       int events __attribute__ ((unused)),
 			       void *data __attribute__ ((unused)))
 {
@@ -3062,7 +3065,7 @@ static void iser_rearm_completions(struct iser_device *dev)
 		eprintf("ibv_req_notify_cq failed\n");
 
 	dev->poll_sched.sched_handler = iser_sched_consume_cq;
-	tgt_add_sched_event(&dev->poll_sched);
+	tgt_append_sched_event(main_evloop, &dev->poll_sched);
 
 	num_delayed_arm = 0;
 }
@@ -3082,7 +3085,7 @@ static void iser_poll_cq_armable(struct iser_device *dev)
 		iser_rearm_completions(dev);
 	else {
 		dev->poll_sched.sched_handler = iser_sched_poll_cq;
-		tgt_add_sched_event(&dev->poll_sched);
+		tgt_append_sched_event(main_evloop, &dev->poll_sched);
 	}
 }
 
@@ -3109,7 +3112,7 @@ static void iser_sched_consume_cq(struct event_data *tev)
 	err = iser_poll_cq(dev, MAX_POLL_WC);
 	if (err > 0) {
 		dev->poll_sched.sched_handler = iser_sched_consume_cq;
-		tgt_add_sched_event(&dev->poll_sched);
+		tgt_append_sched_event(main_evloop, &dev->poll_sched);
 	}
 }
 
@@ -3125,7 +3128,8 @@ static void iser_sched_poll_cq(struct event_data *tev)
 /*
  * Called from main event loop when a CQ notification is available.
  */
-static void iser_handle_cq_event(int fd __attribute__ ((unused)),
+static void iser_handle_cq_event(struct tgt_evloop *evloop,
+				 int fd __attribute__ ((unused)),
 				 int events __attribute__ ((unused)),
 				 void *data)
 {
@@ -3154,7 +3158,8 @@ static void iser_handle_cq_event(int fd __attribute__ ((unused)),
 /*
  * Called from main event loop when async event is available.
  */
-static void iser_handle_async_event(int fd __attribute__ ((unused)),
+static void iser_handle_async_event(struct tgt_evloop *evloop,
+				    int fd __attribute__ ((unused)),
 				    int events __attribute__ ((unused)),
 				    void *data)
 {
@@ -3295,7 +3300,7 @@ static int iser_device_init(struct iser_device *dev)
 		goto out;
 	}
 
-	err = tgt_event_add(dev->cq_channel->fd, EPOLLIN,
+	err = tgt_event_insert(main_evloop, dev->cq_channel->fd, EPOLLIN,
 			    iser_handle_cq_event, dev);
 	if (err) {
 		eprintf("tgt_event_add failed, %m\n");
@@ -3303,7 +3308,7 @@ static int iser_device_init(struct iser_device *dev)
 
 	}
 
-	err = tgt_event_add(dev->ibv_ctxt->async_fd, EPOLLIN,
+	err = tgt_event_insert(main_evloop, dev->ibv_ctxt->async_fd, EPOLLIN,
 			    iser_handle_async_event, dev);
 	if (err)
 		return err;
@@ -3320,8 +3325,8 @@ static void iser_device_release(struct iser_device *dev)
 
 	list_del(&dev->list);
 
-	tgt_event_del(dev->ibv_ctxt->async_fd);
-	tgt_event_del(dev->cq_channel->fd);
+	tgt_event_delete(main_evloop, dev->ibv_ctxt->async_fd);
+	tgt_event_delete(main_evloop, dev->cq_channel->fd);
 	tgt_remove_sched_event(&dev->poll_sched);
 
 	err = ibv_destroy_cq(dev->cq);
@@ -3437,7 +3442,7 @@ static int iser_ib_init(void)
 	}
 
 	dprintf("listening for iser connections on port %d\n", port);
-	err = tgt_event_add(rdma_evt_channel->fd, EPOLLIN,
+	err = tgt_event_insert(main_evloop, rdma_evt_channel->fd, EPOLLIN,
 			    iser_handle_rdmacm, NULL);
 	if (err)
 		return err;
@@ -3472,7 +3477,7 @@ static void iser_ib_release(void)
 	}
 
 	if (!list_empty(&iser_portals_list)) {
-		tgt_event_del(rdma_evt_channel->fd);
+		tgt_event_delete(main_evloop, rdma_evt_channel->fd);
 		iser_delete_portals();
 		rdma_destroy_event_channel(rdma_evt_channel);
 	}
@@ -3483,7 +3488,7 @@ static struct tgt_work nop_work;
 
 #define ISER_TIMER_INT_SEC      5
 
-static void iser_nop_work_handler(void *data)
+static void iser_nop_work_handler(struct tgt_work *w)
 {
 	struct iser_conn *conn;
 	struct iser_task *task;

@@ -63,3 +63,29 @@ int iscsi_transport_register(struct iscsi_transport *t)
 	list_add_tail(&t->iscsi_transport_siblings, &iscsi_transport_list);
 	return 0;
 }
+
+int iscsi_init_evloop(struct tgt_evloop *evloop)
+{
+	int err, nr = 0;
+	struct iscsi_transport *t;
+
+	list_for_each_entry(t, &iscsi_transport_list,
+			    iscsi_transport_siblings) {
+		err = t->ep_init_evloop(evloop);
+		if (!err)
+			nr++;
+	}
+
+	return !nr;
+}
+
+void iscsi_fini_evloop(struct tgt_evloop *evloop)
+{
+	struct iscsi_transport *t;
+
+	list_for_each_entry(t, &iscsi_transport_list,
+			    iscsi_transport_siblings)
+		if (t->ep_fini_evloop)
+			t->ep_fini_evloop(evloop);
+}
+

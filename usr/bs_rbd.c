@@ -649,7 +649,7 @@ static tgtadm_err bs_rbd_init(struct scsi_lu *lu, char *bsopts)
 		eprintf("bs_rbd_init: rados_connect: %d\n", rados_ret);
 		goto fail;
 	}
-	ret = bs_thread_open(info, bs_rbd_request, nr_iothreads);
+	ret = bs_thread_open(lu->tgt->evloop, info, bs_rbd_request, nr_iothreads);
 fail:
 	if (confname)
 		free(confname);

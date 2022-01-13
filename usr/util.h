@@ -17,6 +17,7 @@
 #include <linux/types.h>
 
 #include "be_byteshift.h"
+#include "mutex.h"
 
 #define roundup(x, y) ((((x) + ((y) - 1)) / (y)) * (y))
 #define DIV_ROUND_UP(x, y) (((x) + (y) - 1) / (y))
