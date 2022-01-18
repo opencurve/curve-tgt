@@ -34,12 +34,19 @@ target, lun, login/logout, discover，session, connection等的管理。ISCSI IO
 被迁移到对应的target的epoll线程上去。
 
 ### 2.4 数据结构的锁
-为每一个target提供一个mutex，当target epoll线程在运行时，这把锁式是被epoll线程锁住的，
+
+为每一个target提供一个mutex，当target epoll线程在运行时，这把锁是被epoll线程锁住的，
 这样epoll线程可以任意结束一个sesssion或connection，当线程进入epoll_wait时，这把锁是释
 放了的，epoll_wait返回时又会锁住这把锁。而管理面要存取、删除一个session或者connection时，
 也需要锁住这把锁，这样就可以安全地访问对应target上的session和connection了。
 
 ## 3. tgt与curve
+
 我们为tgt提供了访问curve的驱动，详见doc/README.curve，
 这样用户就可以在任何支持iscsi的操作系统上使用curve块设备存储，例如Windows。
+
+## 4. 关于iser
+
+iser target服务目前依然归属于主线程服务，因为我们还不具备测试RDMA的条件，所以这部分代码
+还没有修改。
 
