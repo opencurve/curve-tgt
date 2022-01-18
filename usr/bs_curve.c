@@ -680,8 +680,8 @@ void register_bs_module(void)
 		WRITE_12,
 		WRITE_16,
 		WRITE_6,
-		WRITE_SAME,
-		WRITE_SAME_16
+//		WRITE_SAME,
+//		WRITE_SAME_16
 	};
 
 	bs_create_opcode_map(&curve_bst, opcodes, ARRAY_SIZE(opcodes));
