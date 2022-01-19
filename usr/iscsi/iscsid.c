@@ -257,10 +257,16 @@ static void login_security_done(struct iscsi_connection *conn)
 	struct iscsi_login *req = (struct iscsi_login *)&conn->req.bhs;
 	struct iscsi_login_rsp *rsp = (struct iscsi_login_rsp *) &conn->rsp.bhs;
 	struct iscsi_session *session;
+	struct target *target;
 
 	if (!conn->tid)
 		return;
 
+	target = target_lookup(conn->tid);	
+	if (target == NULL)
+		return;
+
+	target_lock(target);
 	session = session_find_name(conn->tid, conn->initiator, req->isid);
 	if (session) {
 		if (!req->tsih) {
@@ -279,6 +285,7 @@ static void login_security_done(struct iscsi_connection *conn)
 			rsp->status_class = ISCSI_STATUS_CLS_INITIATOR_ERR;
 			rsp->status_detail = ISCSI_LOGIN_STATUS_TGT_NOT_FOUND;
 			conn->state = STATE_EXIT;
+			target_unlock(target);
 			return;
 		} else if (conn_find(session, conn->cid)) {
 			/* do connection reinstatement */
@@ -293,6 +300,7 @@ static void login_security_done(struct iscsi_connection *conn)
 			rsp->status_class = ISCSI_STATUS_CLS_INITIATOR_ERR;
 			rsp->status_detail = ISCSI_LOGIN_STATUS_NO_SESSION;
 			conn->state = STATE_EXIT;
+			target_unlock(target);
 			return;
 		}
 		/*
@@ -300,6 +308,7 @@ static void login_security_done(struct iscsi_connection *conn)
 		 * later at login_finish().
 		 */
 	}
+	target_unlock(target);
 }
 
 static void text_scan_login(struct iscsi_connection *conn)
