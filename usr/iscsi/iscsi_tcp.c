@@ -296,7 +296,18 @@ static void do_iscsi_tcp_event_handler(struct tgt_evloop *evloop, int fd, int ev
 
 	if (conn->state == STATE_CLOSE) {
 		dprintf("connection closed %p\n", conn);
+		
+		struct target *target = NULL;
+		if (conn->session) {
+			target = target_lookup(conn->tid);
+			if (target->evloop != evloop)
+				target_lock(target);
+			else
+				target = NULL;
+		}
 		conn_close(conn);
+		if (target)
+			target_unlock(target);
 		*closed = 1;
 	}
 }
