@@ -2249,6 +2249,7 @@ tgtadm_err tgt_target_create(int lld, int tid, char *args)
 		if (work_timer_start(target->evloop)){
 			free(target->name);
 			free(target->account.in_aids);
+			tgt_destroy_evloop(target->evloop);
 			free(target);
 			return TGTADM_UNKNOWN_ERR;
 		}
