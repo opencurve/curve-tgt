@@ -2253,12 +2253,14 @@ static int do_send(struct iscsi_connection *conn, int next_state)
 again:
 	ret = conn->tp->ep_write_begin(conn, conn->tx_buffer, conn->tx_size);
 	if (ret < 0) {
-		if (errno != EINTR && errno != EAGAIN)
-			conn->state = STATE_CLOSE;
-		else if (errno == EINTR || errno == EAGAIN)
+		if (errno == EINTR)
 			goto again;
-
-		return -EIO;
+		else if (errno == EAGAIN)
+			return -EAGAIN;
+		else {
+			conn->state = STATE_CLOSE;
+			return -EIO;
+		}
 	}
 
 	conn->tx_size -= ret;
