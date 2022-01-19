@@ -789,10 +789,6 @@ int main(int argc, char **argv)
 	if (is_daemon && daemon(0, 0))
 		exit(1);
 
-	err = log_init(program_name, LOG_SPACE_SIZE, is_daemon, is_debug);
-	if (err)
-		exit(1);
-
 	main_evloop = tgt_new_evloop();
 	if (main_evloop == NULL)
 		exit(1);
@@ -802,6 +798,10 @@ int main(int argc, char **argv)
 		exit(1);
 
 	err = ipc_init();
+	if (err)
+		exit(1);
+
+	err = log_init(program_name, LOG_SPACE_SIZE, is_daemon, is_debug);
 	if (err)
 		exit(1);
 
