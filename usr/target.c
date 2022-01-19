@@ -788,8 +788,6 @@ tgtadm_err tgt_device_destroy(int tid, uint64_t lun, int force)
 		}
 	}
 
-	tgt_event_kick(target->evloop);
-
 	target_unlock(target);
 	return TGTADM_SUCCESS;
 }
