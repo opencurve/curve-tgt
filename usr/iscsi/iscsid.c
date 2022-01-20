@@ -608,11 +608,8 @@ static void login_finish(struct iscsi_connection *conn)
 				if (ret == 0) {
 					if (target->evloop != main_evloop)
 						conn->migrate_to = target;
-					else
-						target_unlock(target);
-				} else {
-					target_unlock(target);
 				}
+				target_unlock(target);
 			}
 			if (ret) {
 				class = ISCSI_STATUS_CLS_TARGET_ERR;
@@ -631,7 +628,6 @@ static void login_finish(struct iscsi_connection *conn)
 
 			struct target *target = target_lookup(conn->tid);
 			if (target->evloop != main_evloop) {
-				target_lock(target);
 				conn->migrate_to = target;
 			}
 		}

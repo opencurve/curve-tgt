@@ -321,7 +321,7 @@ static void iscsi_tcp_event_handler(struct tgt_evloop *evloop, int fd, int event
 	do_iscsi_tcp_event_handler(evloop, fd, events, data, &closed);
 	if (!closed) {
 		if ((migrate_to = conn->migrate_to)) {
-			target_assert_locked(migrate_to);
+			target_lock(migrate_to);
 			conn->migrate_to = NULL;
 			dprintf("connection %p migrate_to %p\n", conn, migrate_to);
 			conn->tp->ep_migrate_evloop(conn, evloop, migrate_to->evloop);
