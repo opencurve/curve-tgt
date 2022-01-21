@@ -2365,6 +2365,7 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 	if (!force && !list_empty(&target->it_nexus_list)) {
 		eprintf("target %d still has it nexus\n", tid);
 		target_unlock(target);
+		target_list_unlock();
 		return TGTADM_TARGET_ACTIVE;
 	}
 
@@ -2375,6 +2376,7 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 		adm_err = tgt_device_destroy(tid, lu->lun, 1);
 		if (adm_err != TGTADM_SUCCESS) {
 			target_unlock(target);
+			target_list_unlock();
 			return adm_err;
 		}
 	}
@@ -2400,7 +2402,6 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 	list_del(&target->lld_siblings);
 
 	target_unlock(target);
-
 	target_list_unlock();
 
 	if (target->evloop != main_evloop) {
