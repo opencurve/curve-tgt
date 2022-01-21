@@ -299,7 +299,7 @@ static void do_iscsi_tcp_event_handler(struct tgt_evloop *evloop, int fd, int ev
 		
 		struct target *target = NULL;
 		if (conn->session) {
-			target = target_lookup(conn->tid);
+			target = conn->session->target->base_target;
 			if (target->evloop != evloop)
 				target_lock(target);
 			else
