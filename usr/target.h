@@ -130,8 +130,4 @@ static inline void target_assert_unlocked(struct target *t)
 
 struct target *target_lookup(int tid);
 
-void target_list_rdlock(void);
-void target_list_wrlock(void);
-void target_list_unlock(void);
-
 #endif
