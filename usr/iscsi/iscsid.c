@@ -517,7 +517,7 @@ static void login_start(struct iscsi_connection *conn)
 			return;
 		}
 
-		conn->tid = target->tid;
+		conn->tid = target->base_target->tid;
 
 		redir = target_redirected(target, conn, buf, &reason);
 		if (redir < 0) {
@@ -534,7 +534,7 @@ static void login_start(struct iscsi_connection *conn)
 			return;
 		}
 
-		if (tgt_get_target_state(target->tid) != SCSI_TARGET_READY) {
+		if (tgt_get_target_state(conn->tid) != SCSI_TARGET_READY) {
 			rsp->status_class = ISCSI_STATUS_CLS_TARGET_ERR;
 			rsp->status_detail = ISCSI_LOGIN_STATUS_TARGET_ERROR;
 			conn->state = STATE_EXIT;
@@ -1403,7 +1403,7 @@ static int iscsi_target_cmd_queue(struct iscsi_task *task)
 	scmd->tag = req->itt;
 	set_task_in_scsi(task);
 
-	err = target_cmd_queue(conn->session->target->tid, scmd);
+	err = target_cmd_queue(conn->session->target->base_target, scmd);
 	if (err)
 		clear_task_in_scsi(task);
 
@@ -1501,7 +1501,7 @@ static int iscsi_tm_execute(struct iscsi_task *task)
 		task->result = err;
 	else {
 		int ret;
-		ret = target_mgmt_request(conn->session->target->tid,
+		ret = target_mgmt_request(conn->session->target->base_target->tid,
 					  conn->session->tsih,
 					  (unsigned long)task, fn, req->lun,
 					  req->rtt, 0);

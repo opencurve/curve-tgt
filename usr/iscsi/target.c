@@ -383,20 +383,26 @@ struct iscsi_target* target_find_by_id(int tid)
 	return NULL;
 }
 
-void iscsi_target_destroy(int tid, int force)
+void iscsi_target_lock(struct iscsi_target *t)
+{
+	target_lock(t->base_target);
+}
+
+void iscsi_target_unlock(struct iscsi_target *t)
+{
+	target_unlock(t->base_target);
+}
+
+void iscsi_target_destroy(struct target *t, int force)
 {
 	struct iscsi_target* target;
 	struct iscsi_session *session, *stmp;
 	struct iscsi_connection *conn, *ctmp;
 
-	target = target_find_by_id(tid);
-	if (!target) {
-		eprintf("can't find the target %d\n", tid);
-		return;
-	}
+	target = (struct iscsi_target *)t->lld_target;
 
 	if (!force && target->nr_sessions) {
-		eprintf("the target %d still has sessions\n", tid);
+		eprintf("the target %d still has sessions\n", t->tid);
 		return;
 	}
 
@@ -409,7 +415,7 @@ void iscsi_target_destroy(int tid, int force)
 	}
 
 	if (!list_empty(&target->sessions_list)) {
-		eprintf("bug still have sessions %d\n", tid);
+		eprintf("bug still have sessions %d\n", t->tid);
 		exit(-1);
 	}
 
@@ -417,7 +423,7 @@ void iscsi_target_destroy(int tid, int force)
 	if (target->redirect_info.callback)
 		free(target->redirect_info.callback);
 	free(target);
-	isns_target_deregister(tgt_targetname(tid));
+	isns_target_deregister(t->name);
 
 	return;
 }
@@ -467,6 +473,8 @@ int iscsi_target_create(struct target *t)
 	INIT_LIST_HEAD(&target->sessions_list);
 	INIT_LIST_HEAD(&target->isns_list);
 	target->tid = tid;
+	target->base_target = t;
+	t->lld_target = target;
 	target->nop_interval = default_nop_interval;
 	target->nop_count = default_nop_count;
 	list_add_tail(&target->tlist, &iscsi_targets_list);
@@ -608,18 +616,13 @@ static tgtadm_err iscsi_target_show_session(struct iscsi_target *target, uint64_
 {
 	tgtadm_err adm_err = TGTADM_SUCCESS;
 	struct iscsi_session *session;
-	struct target *base_target;
 
-	base_target = target_lookup(target->tid);
-	if (!base_target)
-		return TGTADM_NO_TARGET;
-	
-	target_lock(base_target);
+	iscsi_target_lock(target);
 	session = iscsi_target_find_session(target, sid);
 	if (session)
 		adm_err = show_iscsi_param(session->session_param, b);
 
-	target_unlock(base_target);
+	iscsi_target_unlock(target);
 	return adm_err;
 }
 
@@ -631,13 +634,8 @@ static tgtadm_err iscsi_target_show_connections(struct iscsi_target *target,
 	struct iscsi_session *session;
 	struct iscsi_connection *conn;
 	char addr[128];
-	struct target *base_target;
 
-	base_target = target_lookup(target->tid);
-	if (!base_target)
-		return TGTADM_NO_TARGET;
-	
-	target_lock(base_target);
+	iscsi_target_lock(target);
 	list_for_each_entry(session, &target->sessions_list, slist) {
 		list_for_each_entry(conn, &session->conn_list, clist) {
 			memset(addr, 0, sizeof(addr));
@@ -653,7 +651,7 @@ static tgtadm_err iscsi_target_show_connections(struct iscsi_target *target,
 				addr);
 		}
 	}
-	target_unlock(base_target);
+	iscsi_target_unlock(target);
 	return adm_err;
 }
 
@@ -869,9 +867,9 @@ tgtadm_err iscsi_stat(int mode, int tid, uint64_t sid, uint32_t cid, uint64_t lu
 	dprintf("mode:%d tid:%d sid:%" PRIu64 " cid:%" PRIu32 " lun:%" PRIx64 "\n",
 		mode, tid, sid, cid, lun);
 
-	struct target *target = target_lookup(tid);
+	struct iscsi_target* target = target_find_by_id(tid);
 	if (target)
-		target_lock(target);
+		iscsi_target_lock(target);
 	switch (mode) {
 	case MODE_DEVICE:
 		adm_err = iscsi_stat_device_by_id(tid, lun, sid, b);
@@ -886,7 +884,7 @@ tgtadm_err iscsi_stat(int mode, int tid, uint64_t sid, uint32_t cid, uint64_t lu
 		break;
 	}
 	if (target)
-		target_unlock(target);
+		iscsi_target_unlock(target);
 
 	return adm_err;
 }

@@ -52,6 +52,8 @@ struct target {
 	pthread_t ev_td;
 
 	tgt_mutex_t mutex;
+
+	void *lld_target;
 };
 
 struct it_nexus {

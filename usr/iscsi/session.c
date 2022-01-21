@@ -28,6 +28,7 @@
 
 #include "iscsid.h"
 #include "tgtd.h"
+#include "target.h"
 #include "util.h"
 
 struct iscsi_session *session_find_name(int tid, const char *iname, uint8_t *isid)
@@ -82,7 +83,7 @@ int session_create(struct iscsi_connection *conn)
 	for (tsih = last_tsih + 1; tsih != last_tsih; tsih++) {
 		if (!tsih)
 			continue;
-		session = session_lookup_by_tsih(target->tid, tsih);
+		session = session_lookup_by_tsih(target->base_target->tid, tsih);
 		if (!session)
 			break;
 	}
@@ -125,7 +126,7 @@ int session_create(struct iscsi_connection *conn)
 		session->initiator_alias ? session->initiator_alias : "none",
 		conn->cid, addr);
 
-	err = it_nexus_create(target->tid, tsih, 0, session->info);
+	err = it_nexus_create(target->base_target->tid, tsih, 0, session->info);
 	if (err) {
 		free(session->initiator);
 		free(session->initiator_alias);
@@ -172,7 +173,7 @@ static void session_destroy(struct iscsi_session *session)
 	if (session->target) {
 		list_del(&session->slist);
 /* 		session->target->nr_sessions--; */
-		it_nexus_destroy(session->target->tid, session->tsih);
+		it_nexus_destroy_in_target(session->target->base_target, session->tsih);
 	}
 
 	free(session->initiator);

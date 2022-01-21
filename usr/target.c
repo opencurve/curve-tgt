@@ -116,6 +116,18 @@ struct it_nexus *it_nexus_lookup(int tid, uint64_t itn_id)
 	return NULL;
 }
 
+/* function does not need target list lock */
+struct it_nexus *it_nexus_lookup_in_target(struct target *target, uint64_t itn_id)
+{
+	struct it_nexus *itn;
+
+	list_for_each_entry(itn, &target->it_nexus_list, nexus_siblings) {
+		if (itn->itn_id == itn_id)
+			return itn;
+	}
+	return NULL;
+}
+
 static int ua_sense_add(struct it_nexus_lu_info *itn_lu, uint16_t asc)
 {
 	struct ua_sense *uas;
@@ -379,6 +391,33 @@ int it_nexus_destroy(int tid, uint64_t itn_id)
 	list_for_each_entry(lu, &itn->nexus_target->device_list,
 			    device_siblings) {
 		device_release(tid, itn_id, lu->lun, 0);
+	}
+
+	it_nexus_del_lu_info(itn);
+
+	list_del(&itn->nexus_siblings);
+	free(itn);
+	return 0;
+}
+
+/* function does not need target list lock */
+int it_nexus_destroy_in_target(struct target *target, uint64_t itn_id)
+{
+	struct it_nexus *itn;
+	struct scsi_lu *lu;
+
+	dprintf("%d %" PRIu64 "\n", target->tid, itn_id);
+
+	itn = it_nexus_lookup_in_target(target, itn_id);
+	if (!itn)
+		return -ENOENT;
+
+	if (!list_empty(&itn->cmd_list))
+		return -EBUSY;
+
+	list_for_each_entry(lu, &itn->nexus_target->device_list,
+			    device_siblings) {
+		device_release(target->tid, itn_id, lu->lun, 0);
 	}
 
 	it_nexus_del_lu_info(itn);
@@ -1130,19 +1169,18 @@ static struct it_nexus_lu_info *it_nexus_lu_info_lookup(struct it_nexus *itn,
 	return NULL;
 }
 
-int target_cmd_queue(int tid, struct scsi_cmd *cmd)
+int target_cmd_queue(struct target *target, struct scsi_cmd *cmd)
 {
-	struct target *target;
 	struct it_nexus *itn;
 	uint64_t dev_id, itn_id = cmd->cmd_itn_id;
 
-	itn = it_nexus_lookup(tid, itn_id);
+	itn = it_nexus_lookup_in_target(target, itn_id);
 	if (!itn) {
-		eprintf("invalid nexus %d %" PRIx64 "\n", tid, itn_id);
+		eprintf("invalid nexus %d %" PRIx64 "\n", target->tid, itn_id);
 		return -ENOENT;
 	}
 
-	cmd->c_target = target = itn->nexus_target;
+	cmd->c_target = target;
 	cmd->it_nexus = itn;
 
 	dev_id = scsi_get_devid(target->lid, cmd->lun);
@@ -1171,7 +1209,7 @@ int target_cmd_queue(int tid, struct scsi_cmd *cmd)
 	 * Call struct scsi_lu->cmd_perform() that will either be setup for
 	 * internal or passthrough CDB processing using 2 functions below.
 	 */
-	return cmd->dev->cmd_perform(tid, cmd);
+	return cmd->dev->cmd_perform(target->tid, cmd);
 }
 
 /*
@@ -2159,7 +2197,6 @@ static void *target_ev_loop(void *arg)
 static void ev_target_lock(struct tgt_evloop *evloop)
 {
 	struct target *target = tgt_event_userdata(evloop, EV_DATA_TARGET);
-	target_list_rdlock();
 	mutex_lock(&target->mutex);
 }
 
@@ -2167,7 +2204,6 @@ static void ev_target_unlock(struct tgt_evloop *evloop)
 {
 	struct target *target = tgt_event_userdata(evloop, EV_DATA_TARGET);
 	mutex_unlock(&target->mutex);
-	target_list_unlock();
 }
 
 tgtadm_err tgt_target_create(int lld, int tid, char *args)
@@ -2344,7 +2380,7 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 	}
 
 	if (tgt_drivers[lld_no]->target_destroy)
-		tgt_drivers[lld_no]->target_destroy(tid, force);
+		tgt_drivers[lld_no]->target_destroy(target, force);
 
 	list_del(&target->target_siblings);
 

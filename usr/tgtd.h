@@ -309,7 +309,7 @@ extern void tgt_add_sched_event(struct event_data *evt);
 extern void tgt_remove_sched_event(struct event_data *evt);
 
 extern int tgt_event_modify(int fd, int events);
-extern int target_cmd_queue(int tid, struct scsi_cmd *cmd);
+extern int target_cmd_queue(struct target *target, struct scsi_cmd *cmd);
 extern int target_cmd_perform(int tid, struct scsi_cmd *cmd);
 extern int target_cmd_perform_passthrough(int tid, struct scsi_cmd *cmd);
 extern void target_cmd_done(struct scsi_cmd *cmd);
@@ -321,6 +321,8 @@ extern enum mgmt_req_result target_mgmt_request(int tid, uint64_t itn_id,
 						int host_no);
 
 extern struct it_nexus *it_nexus_lookup(int tid, uint64_t itn_id);
+extern struct it_nexus *it_nexus_lookup_in_target(struct target *,
+		uint64_t itn_id);
 extern void target_cmd_io_done(struct scsi_cmd *cmd, int result);
 extern int ua_sense_del(struct scsi_cmd *cmd, int del);
 extern void ua_sense_clear(struct it_nexus_lu_info *itn_lu, uint16_t asc);
@@ -374,6 +376,7 @@ extern int account_available(int tid, int dir);
 
 extern int it_nexus_create(int tid, uint64_t itn_id, int host_no, char *info);
 extern int it_nexus_destroy(int tid, uint64_t itn_id);
+extern int it_nexus_destroy_in_target(struct target *target, uint64_t itn_id);
 
 extern int device_type_register(struct device_type_template *);
 
