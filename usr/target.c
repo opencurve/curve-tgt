@@ -64,6 +64,22 @@ static struct device_type_template *device_type_lookup(int type)
 }
 
 static LIST_HEAD(target_list);
+static pthread_rwlock_t target_list_lock;
+
+void target_list_rdlock(void)
+{
+	pthread_rwlock_rdlock(&target_list_lock);
+}
+
+void target_list_wrlock(void)
+{
+	pthread_rwlock_wrlock(&target_list_lock);
+}
+
+void target_list_unlock(void)
+{
+	pthread_rwlock_unlock(&target_list_lock);
+}
 
 struct target *target_lookup(int tid)
 {
@@ -2142,6 +2158,7 @@ static void *target_ev_loop(void *arg)
 static void ev_target_lock(struct tgt_evloop *evloop)
 {
 	struct target *target = tgt_event_userdata(evloop, EV_DATA_TARGET);
+	target_list_rdlock();
 	mutex_lock(&target->mutex);
 }
 
@@ -2149,6 +2166,7 @@ static void ev_target_unlock(struct tgt_evloop *evloop)
 {
 	struct target *target = tgt_event_userdata(evloop, EV_DATA_TARGET);
 	mutex_unlock(&target->mutex);
+	target_list_unlock();
 }
 
 tgtadm_err tgt_target_create(int lld, int tid, char *args)
@@ -2251,6 +2269,8 @@ tgtadm_err tgt_target_create(int lld, int tid, char *args)
 		if (target->tid < pos->tid)
 			break;
 
+	target_list_wrlock();
+
 	list_add_tail(&target->target_siblings, &pos->target_siblings);
 
 	INIT_LIST_HEAD(&target->acl_list);
@@ -2263,6 +2283,8 @@ tgtadm_err tgt_target_create(int lld, int tid, char *args)
 		tgt_drivers[lld]->target_create(target);
 
 	list_add_tail(&target->lld_siblings, &tgt_drivers[lld]->target_list);
+
+	target_list_unlock();
 
 	if (target->evloop != main_evloop &&
 	    pthread_create(&target->ev_td, NULL, target_ev_loop, target)) {
@@ -2290,6 +2312,8 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 	target = target_lookup(tid);
 	if (!target)
 		return TGTADM_NO_TARGET;
+
+	target_list_wrlock();
 
 	/* called by mgmt not from target event loop thread, so we can lock target here */
 	target_lock(target);
@@ -2332,6 +2356,8 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 	list_del(&target->lld_siblings);
 
 	target_unlock(target);
+
+	target_list_unlock();
 
 	if (target->evloop != main_evloop) {
 		tgt_event_stop(target->evloop);
