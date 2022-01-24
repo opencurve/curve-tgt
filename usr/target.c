@@ -2315,6 +2315,7 @@ tgtadm_err tgt_target_create(int lld, int tid, char *args)
 		eprintf("can not create evloop thread for target %s\n", targetname);
 		target->ev_td = 0;
 		tgt_target_destroy(lld, tid, 1);
+		return TGTADM_UNKNOWN_ERR;
 	}
 
 	dprintf("Succeed to create a new target %d\n", tid);
