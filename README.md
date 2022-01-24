@@ -211,8 +211,4 @@ size=10G
 
 ## 7. Windows测试
 
-本测试使用了虚拟机。Host OS是Linux, Linux上跑了一个virtual box和tgt，virtual box里运行的是Win7。测试结果Win7能使用ＴＧＴ输出的ＳＣＳＩ设备。
-
-![image](images/win1.png)
-![image](images/win2.png)
-![image](images/win3.png)
+本系统对Windows经过初步测试，工作良好。具体怎么在Windows上配置iscsi客户端，可以参照：<A>https://jingyan.baidu.com/article/e4511cf37feade2b845eaff8.html</A>
