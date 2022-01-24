@@ -46,6 +46,9 @@ static LIST_HEAD(device_type_list);
 
 static struct target global_target;
 
+static tgtadm_err do_tgt_device_destroy(int tid, uint64_t lun, int force,
+	int locked);
+
 int device_type_register(struct device_type_template *t)
 {
 	list_add_tail(&t->device_type_siblings, &device_type_list);
@@ -754,7 +757,7 @@ fail_lu_init:
 	goto out;
 }
 
-tgtadm_err tgt_device_destroy(int tid, uint64_t lun, int force)
+static tgtadm_err do_tgt_device_destroy(int tid, uint64_t lun, int force, int locked)
 {
 	struct target *target;
 	struct scsi_lu *lu;
@@ -775,9 +778,11 @@ tgtadm_err tgt_device_destroy(int tid, uint64_t lun, int force)
 		return TGTADM_NO_LUN;
 	}
 
-	target_lock(target);
+	if (!locked)
+		target_lock(target);
 	if (!list_empty(&lu->cmd_queue.queue) || lu->cmd_queue.active_cmd) {
-		target_unlock(target);
+		if (!locked)
+			target_unlock(target);
 		return TGTADM_LUN_ACTIVE;
 	}
 
@@ -827,8 +832,14 @@ tgtadm_err tgt_device_destroy(int tid, uint64_t lun, int force)
 		}
 	}
 
-	target_unlock(target);
+	if (!locked)
+		target_unlock(target);
 	return TGTADM_SUCCESS;
+}
+
+tgtadm_err tgt_device_destroy(int tid, uint64_t lun, int force)
+{
+	return do_tgt_device_destroy(tid, lun, force, 0);
 }
 
 struct lu_phy_attr *lu_attr_lookup(int tid, uint64_t lun)
@@ -2343,7 +2354,7 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 		/* we remove lun0 last */
 		lu = list_entry(target->device_list.prev, struct scsi_lu,
 				device_siblings);
-		adm_err = tgt_device_destroy(tid, lu->lun, 1);
+		adm_err = do_tgt_device_destroy(tid, lu->lun, 1, 1);
 		if (adm_err != TGTADM_SUCCESS) {
 			target_unlock(target);
 			return adm_err;
