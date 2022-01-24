@@ -298,8 +298,8 @@ void bs_thread_close(struct bs_thread_info *info)
 	pthread_mutex_destroy(&info->finished_lock);
 	free(info->worker_thread);
 	info->worker_thread = NULL;
-	close(info->sig_fd);
 	tgt_event_delete(info->evloop, info->sig_fd);
+	close(info->sig_fd);
 	info->sig_fd = -1;
 	info->evloop = NULL;
 }
