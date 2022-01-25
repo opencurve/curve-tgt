@@ -161,3 +161,8 @@ size=10G
 ## 7. Windows测试
 
 本系统对Windows经过初步测试，工作良好。具体怎么在Windows上配置iscsi客户端，可以参照：<A>https://jingyan.baidu.com/article/e4511cf37feade2b845eaff8.html</A>
+
+## 8. CHAP
+
+在Windows上设置CHAP认证时，请注意机密必须包含12到16个字符，要在tgt和Windows上保持一致。
+
