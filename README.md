@@ -121,7 +121,7 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 
         /*
          * 这里要锁住target，因为我们要删除数据结构，所以不能和iscsi io
-         * 线程一起共享，必须时在scsi 线程释放了锁时进行
+         * 线程一起共享，必须在scsi 线程释放了锁时进行
          */
 
         target_lock(target);                                            
