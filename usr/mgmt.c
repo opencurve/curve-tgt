@@ -243,7 +243,6 @@ static tgtadm_err device_mgmt(int lld_no, struct mgmt_task *mtask)
 
 	switch (req->op) {
 	case OP_NEW:
-		eprintf("sz:%d params:%s\n",mtask->req_bsize,params);
 		adm_err = tgt_device_create(req->tid, req->device_type, req->lun,
 					    params, 1);
 		break;
