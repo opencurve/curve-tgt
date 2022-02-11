@@ -2335,8 +2335,6 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 	struct scsi_lu *lu;
 	tgtadm_err adm_err;
 
-	eprintf("target destroy\n");
-
 	target = target_lookup(tid);
 	if (!target)
 		return TGTADM_NO_TARGET;
