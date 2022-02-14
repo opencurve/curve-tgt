@@ -441,6 +441,28 @@ static void tgt_cmd_queue_init(struct tgt_cmd_queue *q)
 	INIT_LIST_HEAD(&q->queue);
 }
 
+tgtadm_err tgt_device_size_update(struct target *target, struct scsi_lu *lu, char *buf)
+{
+	int err;
+	uint64_t size;
+
+	if (strcasecmp(buf, "auto")) {
+		eprintf("size must be auto, but '%s' is given\n", buf);
+		return TGTADM_UNKNOWN_PARAM;
+	}
+
+	if (!lu->bst->bs_getlength)
+		return TGTADM_UNSUPPORTED_OPERATION;
+	err = lu->bst->bs_getlength(lu, &size);
+	if (err) {
+		return TGTADM_UNKNOWN_ERR;
+	}
+
+	lu->size = size;
+	eprintf("updated size to %ld\n", size);
+	return TGTADM_SUCCESS;
+}
+
 tgtadm_err tgt_device_path_update(struct target *target, struct scsi_lu *lu,
 				  char *path)
 {

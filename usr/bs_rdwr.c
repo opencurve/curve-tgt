@@ -33,6 +33,7 @@
 
 #include <linux/fs.h>
 #include <sys/epoll.h>
+#include <sys/ioctl.h>
 
 #include "list.h"
 #include "util.h"
@@ -392,6 +393,34 @@ static void bs_rdwr_exit(struct scsi_lu *lu)
 	bs_thread_close(info);
 }
 
+static int bs_rdwr_getlength(struct scsi_lu *lu, uint64_t *size)
+{
+	int fd = lu->fd, err = 0;
+	struct stat64 st;
+
+	err = fstat64(fd, &st);
+	if (err < 0) {
+		err = -errno;
+		eprintf("Cannot get stat %d, %m\n", fd);
+		return err;
+	}
+
+	if (S_ISREG(st.st_mode)) {
+		*size = st.st_size;
+	} else if (S_ISBLK(st.st_mode)) {
+		err = ioctl(fd, BLKGETSIZE64, size);
+		if (err < 0) {
+			err = -errno;
+			eprintf("Cannot get size %d, %m\n", fd);
+		}
+	} else {
+		err = -EINVAL;
+		eprintf("Cannot use this file mode %x\n", st.st_mode);
+	}
+
+	return 0;
+}
+
 static struct backingstore_template rdwr_bst = {
 	.bs_name		= "rdwr",
 	.bs_datasize		= sizeof(struct bs_thread_info),
@@ -400,6 +429,7 @@ static struct backingstore_template rdwr_bst = {
 	.bs_init		= bs_rdwr_init,
 	.bs_exit		= bs_rdwr_exit,
 	.bs_cmd_submit		= bs_thread_cmd_submit,
+	.bs_getlength		= bs_rdwr_getlength,
 	.bs_oflags_supported    = O_SYNC | O_DIRECT,
 };
 

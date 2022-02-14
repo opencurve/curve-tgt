@@ -80,8 +80,6 @@ static int sbc_mode_page_update(struct scsi_cmd *cmd, uint8_t *data, int *change
 	if (pg == NULL)
 		return 1;
 
-	eprintf("%x %x\n", pg->mode_data[0], data[2]);
-
 	switch (pcode) {
 	case 0x08: /* Cachning mode page */
 		old = pg->mode_data[0];

@@ -174,6 +174,7 @@ struct backingstore_template {
 	tgtadm_err (*bs_init)(struct scsi_lu *dev, char *bsopts);
 	void (*bs_exit)(struct scsi_lu *dev);
 	int (*bs_cmd_submit)(struct scsi_cmd *cmd);
+	int (*bs_getlength)(struct scsi_lu *dev, uint64_t *size);
 	int bs_oflags_supported;
 	unsigned long bs_supported_ops[NR_SCSI_OPCODES / __WORDSIZE];
 
@@ -276,6 +277,7 @@ extern int device_reserve(struct scsi_cmd *cmd);
 extern int device_release(int tid, uint64_t itn_id, uint64_t lun, int force);
 extern int device_reserved(struct scsi_cmd *cmd);
 extern tgtadm_err tgt_device_path_update(struct target *target, struct scsi_lu *lu, char *path);
+extern tgtadm_err tgt_device_size_update(struct target *target, struct scsi_lu *lu, char *buf);
 
 extern tgtadm_err tgt_target_create(int lld, int tid, char *args);
 extern tgtadm_err tgt_target_destroy(int lld, int tid, int force);

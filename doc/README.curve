@@ -62,3 +62,17 @@ New device files, e.g. /dev/sdz, will be created on your system after
 login completion. you can check the new devices by 'ls /dev/disk/by-path'.
 Now your system can use the Curve volume like ordinal HDDs.
 
+4. Update iSCSI disk size
+
+Assume you have created iscsi target (tid 1) and logical unit (lun 1),
+you may want to resize the Curve volume and let iscsi user know the change,
+you can use the following steps to do so:
+
+ a) Use `curve extent' command to resize the volume
+ b) Update tgt by using the following command:
+    tgtadm --mode logicalunit --op update --tid 1 --lun 1 --params disksize=auto
+ c) On linux client you execute the following command to refresh device:
+    iscsiadm --mode node -R
+ d) On windows client, run 'Computer management', goto 'Storage', right click on 
+    'Disk management', select 'refresh' on the menu, you will find extent
+    not used in the disk.
