@@ -637,6 +637,13 @@ static void bs_curve_exit(struct scsi_lu *lu)
 	pthread_cond_destroy(&info->pending_cond);
 }
 
+static int bs_curve_getlength(struct scsi_lu *lu, uint64_t *size)
+{
+	struct bs_curve_info *info = BS_CURVE_I(lu);
+	*size = nebd_lib_filesize(info->curve_fd);
+	return 0;
+}
+
 static struct backingstore_template curve_bst = {
 	.bs_name		= "curve",
 	.bs_datasize    	= sizeof(struct bs_curve_info),
@@ -645,6 +652,7 @@ static struct backingstore_template curve_bst = {
 	.bs_open		= bs_curve_open,
 	.bs_close       	= bs_curve_close,
 	.bs_cmd_submit  	= bs_curve_cmd_submit,
+	.bs_getlength		= bs_curve_getlength,
 	.bs_oflags_supported    = O_SYNC | O_DIRECT
 };
 

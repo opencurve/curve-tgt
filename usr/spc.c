@@ -1907,6 +1907,7 @@ enum {
 	Opt_mode_page,
 	Opt_path, Opt_bsopts,
 	Opt_bsoflags, Opt_thinprovisioning,
+	Opt_disksize,
 	Opt_err,
 };
 
@@ -1929,6 +1930,7 @@ static match_table_t tokens = {
 	{Opt_bsopts, "bsopts=%s"},
 	{Opt_bsoflags, "bsoflags=%s"},
 	{Opt_thinprovisioning, "thin_provisioning=%s"},
+	{Opt_disksize, "disksize=%s"},
 	{Opt_err, NULL},
 };
 
@@ -2041,6 +2043,10 @@ tgtadm_err lu_config(struct scsi_lu *lu, char *params, match_fn_t *fn)
 		case Opt_path:
 			match_strncpy(buf, &args[0], sizeof(buf));
 			adm_err = tgt_device_path_update(lu->tgt, lu, buf);
+			break;
+		case Opt_disksize:
+			match_strncpy(buf, &args[0], sizeof(buf));
+			adm_err = tgt_device_size_update(lu->tgt, lu, buf);
 			break;
 		default:
 			adm_err = fn ? fn(lu, p) : TGTADM_INVALID_REQUEST;
