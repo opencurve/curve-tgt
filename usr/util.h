@@ -207,6 +207,8 @@ int concat_buf_finish(struct concat_buf *b);
 int concat_write(struct concat_buf *b, int fd, int offset);
 void concat_buf_release(struct concat_buf *b);
 
+int tgt_get_file_length(int fd, uint64_t *size);
+
 
 /* If we have recent enough glibc to support PUNCH HOLE we try to unmap
  * the region.
