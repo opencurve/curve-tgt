@@ -13,7 +13,7 @@ Below is a brief description of setup.
 
 $ git clone https://github.com/opencurve/curve-tgt.git
 $ cd tgt
-$ git checkout curvebs_multi_pollset
+$ git checkout master
 $ make
 # make install
 
