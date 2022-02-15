@@ -214,3 +214,32 @@ int spc_memcpy(uint8_t *dst, uint32_t *dst_remain_len,
 	}
 	return copy_len;
 }
+
+int tgt_get_file_length(int fd, uint64_t *size)
+{
+	int err = 0;
+	struct stat64 st;
+
+	err = fstat64(fd, &st);
+	if (err < 0) {
+		err = -errno;
+		eprintf("Cannot get stat %d, %m\n", fd);
+		return err;
+	}
+
+	if (S_ISREG(st.st_mode)) {
+		*size = st.st_size;
+	} else if (S_ISBLK(st.st_mode)) {
+		err = ioctl(fd, BLKGETSIZE64, size);
+		if (err < 0) {
+			err = -errno;
+			eprintf("Cannot get size %d, %m\n", fd);
+		}
+	} else {
+		err = -EINVAL;
+		eprintf("Cannot use this file mode %x\n", st.st_mode);
+	}
+
+	return 0;
+}
+

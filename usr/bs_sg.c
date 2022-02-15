@@ -493,30 +493,7 @@ static tgtadm_err bs_sg_lu_init(struct scsi_lu *lu)
 
 static int bs_sg_getlength(struct scsi_lu *lu, uint64_t *size)
 {
-	int fd = lu->fd, err = 0;
-	struct stat64 st;
-
-	err = fstat64(fd, &st);
-	if (err < 0) {
-		err = -errno;
-		eprintf("Cannot get stat %d, %m\n", fd);
-		return err;
-	}
-
-	if (S_ISREG(st.st_mode)) {
-		*size = st.st_size;
-	} else if (S_ISBLK(st.st_mode)) {
-		err = ioctl(fd, BLKGETSIZE64, size);
-		if (err < 0) {
-			err = -errno;
-			eprintf("Cannot get size %d, %m\n", fd);
-		}
-	} else {
-		err = -EINVAL;
-		eprintf("Cannot use this file mode %x\n", st.st_mode);
-	}
-
-	return 0;
+	return tgt_get_file_length(lu->fd, size);
 }
 
 
