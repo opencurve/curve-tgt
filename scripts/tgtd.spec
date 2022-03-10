@@ -53,6 +53,7 @@ Currently, software iSCSI targets are supported.
 %{__install} -p -m 0644 doc/manpages/tgt-setup-lun.8 %{buildroot}/%{_mandir}/man8
 %{__install} -p -m 0644 doc/manpages/tgtimg.8 %{buildroot}/%{_mandir}/man8
 %{__install} -p -m 0600 conf/targets.conf %{buildroot}/etc/tgt
+%{__install} -p -m 0644 scripts/tgtd.service %{buildroot}%{_unitdir}
 
 pushd usr
 %{__make} install DESTDIR=%{buildroot} sbindir=%{_sbindir}
