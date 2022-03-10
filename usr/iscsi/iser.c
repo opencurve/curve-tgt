@@ -89,7 +89,7 @@ char *iser_portal_addr;
 				 ~MASK_BY_BIT(b))
 #define ALIGN_TO_32(x)  	ALIGN_TO_BIT(x, 5)
 
-struct iscsi_sense_data {
+static struct iscsi_sense_data {
 	uint16_t length;
 	uint8_t data[0];
 } __packed;
