@@ -341,7 +341,7 @@ static int bs_aio_open(struct scsi_lu *lu, char *path, int *fd, uint64_t *size)
 	dprintf("eventfd:%d for tgt:%d lun:%"PRId64 "\n",
 		afd, info->lu->tgt->tid, info->lu->lun);
 
-	ret = tgt_event_add(afd, EPOLLIN, bs_aio_get_completions, info);
+	ret = tgt_event_insert(lu->tgt->evloop, afd, EPOLLIN, bs_aio_get_completions, info);
 	if (ret)
 		goto close_eventfd;
 	info->evt_fd = afd;
@@ -374,7 +374,7 @@ static int bs_aio_open(struct scsi_lu *lu, char *path, int *fd, uint64_t *size)
 	return 0;
 
 remove_tgt_evt:
-	tgt_event_del(afd);
+	tgt_event_delete(lu->tgt->evloop, afd);
 close_eventfd:
 	close(afd);
 close_ctx:
