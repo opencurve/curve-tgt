@@ -89,11 +89,6 @@ char *iser_portal_addr;
 				 ~MASK_BY_BIT(b))
 #define ALIGN_TO_32(x)  	ALIGN_TO_BIT(x, 5)
 
-static struct iscsi_sense_data {
-	uint16_t length;
-	uint8_t data[0];
-} __packed;
-
 static size_t buf_pool_sz_mb = DEFAULT_POOL_SIZE_MB;
 static int cq_vector = -1;
 
@@ -2047,7 +2042,7 @@ static void iser_scsi_cmd_iosubmit(struct iser_task *task, int not_last)
 	set_task_in_scsi(task);
 	iser_conn_get(conn);
 
-	target_cmd_queue(session->target->tid, scmd);
+	target_cmd_queue(session->target->base_target, scmd);
 }
 
 static int iser_scsi_cmd_done(uint64_t nid, int result,

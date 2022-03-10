@@ -1096,11 +1096,6 @@ void iscsi_rsp_set_residual(struct iscsi_cmd_rsp *rsp, struct scsi_cmd *scmd)
 		rsp->residual_count = 0;
 }
 
-static struct iscsi_sense_data {
-	uint16_t length;
-	uint8_t  data[0];
-} __packed;
-
 static int iscsi_cmd_rsp_build(struct iscsi_task *task)
 {
 	struct iscsi_connection *conn = task->conn;
