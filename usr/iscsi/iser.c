@@ -2065,7 +2065,7 @@ static void iser_scsi_cmd_iosubmit(struct iser_task *task, int not_last)
 	set_task_in_scsi(task);
 	iser_conn_get(conn);
 
-	target_cmd_queue(session->target->tid, scmd);
+	target_cmd_queue(session->target->base_target, scmd);
 }
 
 static int iser_scsi_cmd_done(uint64_t nid, int result,
