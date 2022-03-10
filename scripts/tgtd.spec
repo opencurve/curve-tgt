@@ -42,6 +42,7 @@ Currently, software iSCSI targets are supported.
 %{__install} -d %{buildroot}%{_initrddir}
 %{__install} -d %{buildroot}/etc/bash_completion.d
 %{__install} -d %{buildroot}/etc/tgt
+%{__install} -d %{buildroot}/lib/systemd/system
 
 %{__install} -p -m 0755 scripts/tgt-setup-lun %{buildroot}%{_sbindir}
 %{__install} -p -m 0755 scripts/initd.sample %{buildroot}%{_initrddir}/tgtd
@@ -53,7 +54,7 @@ Currently, software iSCSI targets are supported.
 %{__install} -p -m 0644 doc/manpages/tgt-setup-lun.8 %{buildroot}/%{_mandir}/man8
 %{__install} -p -m 0644 doc/manpages/tgtimg.8 %{buildroot}/%{_mandir}/man8
 %{__install} -p -m 0600 conf/targets.conf %{buildroot}/etc/tgt
-%{__install} -p -m 0644 scripts/tgtd.service %{buildroot}%{_unitdir}
+%{__install} -p -m 0644 scripts/tgt.service %{buildroot}/lib/systemd/system/
 
 pushd usr
 %{__make} install DESTDIR=%{buildroot} sbindir=%{_sbindir}
@@ -90,4 +91,5 @@ fi
 %{_mandir}/man8/*
 %{_initrddir}/tgtd
 /etc/bash_completion.d/tgt
+/lib/systemd/system/tgt.service
 %attr(0600,root,root) %config(noreplace) /etc/tgt/targets.conf

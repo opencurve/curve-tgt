@@ -1,0 +1,23 @@
+[Unit]
+Description=(i)SCSI target daemon
+Documentation=man:tgtd(8)
+After=network.target
+
+[Service]
+Type=forking
+TasksMax=infinity
+ExecStart=/usr/sbin/tgtd
+ExecStartPost=/usr/sbin/tgtadm --op update --mode sys --name State -v offline
+ExecStartPost=/usr/sbin/tgt-admin -e -c /etc/tgt/targets.conf
+ExecStartPost=/usr/sbin/tgtadm --op update --mode sys --name State -v ready
+
+ExecStop=/usr/sbin/tgtadm --op update --mode sys --name State -v offline
+ExecStop=/usr/sbin/tgt-admin --offline ALL
+ExecStop=/usr/sbin/tgt-admin --update ALL -c /dev/null -f
+ExecStop=/usr/sbin/tgtadm --op delete --mode system
+
+ExecReload=/usr/sbin/tgt-admin --update ALL -c /etc/tgt/targets.conf
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
