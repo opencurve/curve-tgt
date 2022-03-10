@@ -63,7 +63,7 @@ struct mgmt_task {
 #define MAX_MGT_BUFSIZE	(8*1024) /* limit incoming mgmt request data size */
 
 static int ipc_fd, ipc_lock_fd;
-char mgmt_path[256];
+char mgmt_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
 char mgmt_lock_path[256];
 
 static struct mgmt_task *mtask_alloc(void);
