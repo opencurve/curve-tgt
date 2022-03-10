@@ -3303,7 +3303,7 @@ static int iser_device_init(struct iser_device *dev)
 	err = tgt_event_insert(main_evloop, dev->cq_channel->fd, EPOLLIN,
 			    iser_handle_cq_event, dev);
 	if (err) {
-		eprintf("tgt_event_add failed, %m\n");
+		eprintf("tgt_event_insert failed, %m\n");
 		goto out;
 
 	}

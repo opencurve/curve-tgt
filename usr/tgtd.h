@@ -302,9 +302,6 @@ extern void tgt_init_sched_event(struct event_data *evt,
 
 typedef void (*event_handler_t)(struct tgt_evloop *evloop, int fd, int events, void *data);
 
-extern int tgt_event_add(int fd, int events, event_handler_t handler, void *data);
-extern void tgt_event_del(int fd);
-
 extern void tgt_add_sched_event(struct event_data *evt);
 extern void tgt_remove_sched_event(struct event_data *evt);
 
