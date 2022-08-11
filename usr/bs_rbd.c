@@ -41,6 +41,7 @@
 #include "scsi.h"
 #include "spc.h"
 #include "bs_thread.h"
+#include "target.h"
 
 #include "rados/librados.h"
 #include "rbd/librbd.h"
