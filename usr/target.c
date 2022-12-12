@@ -769,7 +769,8 @@ out:
 		free(path);
 	if (bsoflags)
 		free(bsoflags);
-	target_unlock(target);
+	if (target)
+		target_unlock(target);
 	return adm_err;
 
 fail_bs_init:
