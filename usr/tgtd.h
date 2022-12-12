@@ -458,7 +458,7 @@ void tgt_event_set_loop_release_cb(struct tgt_evloop *evloop,
 	void (*release)(struct tgt_evloop *), void (*acquire)(struct tgt_evloop *));
 void *tgt_event_userdata(struct tgt_evloop *, int idx);
 void *tgt_event_set_userdata(struct tgt_evloop *, int idx, void *data);
-int tgt_event_migrate(int fd, struct tgt_evloop *old, struct tgt_evloop *new);
+int tgt_event_migrate(int fd, struct tgt_evloop *old, struct tgt_evloop *new_);
 
 #define TGT_EVLOOP_UP	0
 #define TGT_EVLOOP_DOWN	1

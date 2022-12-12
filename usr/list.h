@@ -57,24 +57,24 @@ static inline int list_empty(const struct list_head *head)
 	     &pos->member != (head); 					\
 	     pos = n, n = list_entry(n->member.next, typeof(*n), member))
 
-static inline void __list_add(struct list_head *new,
+static inline void __list_add(struct list_head *new_,
 			      struct list_head *prev,
 			      struct list_head *next)
 {
-	next->prev = new;
-	new->next = next;
-	new->prev = prev;
-	prev->next = new;
+	next->prev = new_;
+	new_->next = next;
+	new_->prev = prev;
+	prev->next = new_;
 }
 
-static inline void list_add(struct list_head *new, struct list_head *head)
+static inline void list_add(struct list_head *new_, struct list_head *head)
 {
-	__list_add(new, head, head->next);
+	__list_add(new_, head, head->next);
 }
 
-static inline void list_add_tail(struct list_head *new, struct list_head *head)
+static inline void list_add_tail(struct list_head *new_, struct list_head *head)
 {
-	__list_add(new, head->prev, head);
+	__list_add(new_, head->prev, head);
 }
 
 static inline void __list_del(struct list_head * prev, struct list_head * next)
