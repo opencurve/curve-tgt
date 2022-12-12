@@ -76,3 +76,17 @@ you can use the following steps to do so:
  d) On windows client, run 'Computer management', goto 'Storage', right click on 
     'Disk management', select 'refresh' on the menu, you will find extent
     not used in the disk.
+
+5. Tuning open-iscsi
+
+Tuning open-iscsi is required for heavy disk usage application, edit config
+file /etc/iscsi/iscsid.conf, change following options for example:
+	node.session.cmds_max = 512
+	node.session.queue_depth = 512
+Then restart iscsid and open-iscsi:
+	/etc/init.d/iscsid restart
+	/etc/init.d/open-iscsi restart
+Also, you need to logout and login tgt again:
+	# iscsiadm -m node --portal 127.0.0.1:3260 --logout
+	# iscsiadm -m node --portal 127.0.0.1:3260 --login
+
