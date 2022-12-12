@@ -84,8 +84,8 @@ file /etc/iscsi/iscsid.conf, change following options for example:
 	node.session.cmds_max = 512
 	node.session.queue_depth = 512
 Then restart iscsid and open-iscsi:
-	/etc/init.d/iscsid restart
-	/etc/init.d/open-iscsi restart
+	# /etc/init.d/iscsid restart
+	# /etc/init.d/open-iscsi restart
 Also, you need to logout and login tgt again:
 	# iscsiadm -m node --portal 127.0.0.1:3260 --logout
 	# iscsiadm -m node --portal 127.0.0.1:3260 --login
