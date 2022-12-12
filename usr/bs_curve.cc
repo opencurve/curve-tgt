@@ -32,13 +32,15 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/eventfd.h>
-#include <nebd/libnebd.h>
+#include <libcurve.h>
 
+extern "C" {
 #include "list.h"
 #include "util.h"
 #include "tgtd.h"
 #include "target.h"
 #include "scsi.h"
+}
 
 #define __predict_true(exp)     __builtin_expect((exp), 1)
 #define __predict_false(exp)    __builtin_expect((exp), 0)
@@ -46,6 +48,7 @@
 struct bs_curve_info {
 	int curve_fd;
 	int evt_fd;
+	char *curve_name;
 	pthread_mutex_t mutex;
 	struct list_head cmd_inflight_list;
 	struct list_head cmd_complete_list;
@@ -66,18 +69,55 @@ struct bs_curve_info {
 };
 
 typedef struct bs_curve_iocb {
-	struct NebdClientAioContext ctx;
+	struct CurveAioContext ctx;
 	struct scsi_cmd *cmd;
 	struct bs_curve_info *info;
 
+#define WRITE_SAME_DUP_BLOCKS	8
 	struct write_same {
-		int64_t tl;
+		uint64_t tl;
 		uint64_t offset;
+		char *tmpbuf;
 	}ws;
 } bs_curve_iocb_t;
 
+using namespace curve::client;
+static curve::client::CurveClient *g_curve;
+
 static void cmd_submit(struct bs_curve_info *info, struct scsi_cmd *cmd);
 static void cmd_done(struct bs_curve_info *info, struct scsi_cmd *cmd);
+
+#define CURVE_CONF_PATH "/etc/curve/client.conf"
+                                                                                
+static int tgt_init_curve(void)
+{
+	if (g_curve)
+		return 0;
+
+	int ret = 0;
+	curve::client::CurveClient *curve_client;
+	curve_client = new curve::client::CurveClient;
+	if (curve_client->Init(CURVE_CONF_PATH)) {
+		eprintf("can not init curve client, errno=%d\n", errno);
+		delete curve_client;
+		ret = -1;
+	}
+	g_curve = curve_client;
+	return ret;
+}
+
+static int tgt_curvedev_get_path(const char *curve_path, char* path)
+{
+	strcpy(path, curve_path);
+	char *p = strstr(path, "//");
+	if (p == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+    strcpy(path, p+1);                                                          
+    path[0] = '/'; 
+	return 0;
+}
 
 static inline struct bs_curve_info *BS_CURVE_I(struct scsi_lu *lu)
 {
@@ -86,7 +126,7 @@ static inline struct bs_curve_info *BS_CURVE_I(struct scsi_lu *lu)
 
 static void *thread_cmd_worker(void *arg)
 {
-	struct bs_curve_info *info = arg;
+	struct bs_curve_info *info = (struct bs_curve_info *)arg;
 	struct scsi_cmd *cmd;
 
 	while (1) {
@@ -122,7 +162,7 @@ static tgtadm_err thread_group_open(struct bs_curve_info *info, int nr_threads)
 	int i, ret;
 
 	info->stop = 0;
-	info->worker_thread = zalloc(sizeof(pthread_t) * nr_threads);
+	info->worker_thread = (pthread_t *)zalloc(sizeof(pthread_t) * nr_threads);
 	if (!info->worker_thread)
 		return TGTADM_NOMEM;
 
@@ -232,7 +272,7 @@ static void cmd_done(struct bs_curve_info *info, struct scsi_cmd *cmd)
 	}
 }
 
-static void bs_curve_aio_callback(struct NebdClientAioContext* curve_ctx)
+static void bs_curve_aio_callback(struct CurveAioContext* curve_ctx)
 {
 	bs_curve_iocb_t *iocb = container_of(curve_ctx, bs_curve_iocb_t, ctx);
 	struct scsi_cmd *cmd = iocb->cmd;
@@ -252,12 +292,12 @@ static void bs_curve_aio_callback(struct NebdClientAioContext* curve_ctx)
 		break;
 	}
 
-	if (iocb->ctx.ret == 0)
+	if ((size_t)iocb->ctx.ret == iocb->ctx.length)
 		result = SAM_STAT_GOOD;
 	else {
 		result = SAM_STAT_CHECK_CONDITION;
-		eprintf("io error %p %x %d %ld %" PRIu64 ", %m\n",
-                        cmd, cmd->scb[0], iocb->ctx.ret, iocb->ctx.length,
+		eprintf("io error %p %x %d %d %ld %" PRIu64 ", %m\n",
+                        cmd, cmd->scb[0], iocb->ctx.op, iocb->ctx.ret, iocb->ctx.length,
 			iocb->ctx.offset);
 		sense_data_build(cmd, MEDIUM_ERROR, asc);
 	}
@@ -270,7 +310,7 @@ static void bs_curve_aio_callback(struct NebdClientAioContext* curve_ctx)
 
 static void bs_curve_get_completions(struct tgt_evloop* evloop, int fd, int events, void *data)
 {
-	struct bs_curve_info *info = data;
+	struct bs_curve_info *info = (struct bs_curve_info *)data;
 	struct list_head temp_list;
 	struct scsi_cmd *cmd;
 	/* read from eventfd returns 8-byte int, fails with the error EINVAL
@@ -308,7 +348,7 @@ static int bs_curve_io_prep_pread(struct bs_curve_info *info,
 	iocb->ctx.offset = iocb->cmd->offset;
 	iocb->ctx.length = scsi_get_in_length(iocb->cmd);
 	iocb->ctx.buf = scsi_get_in_buffer(iocb->cmd);
-	iocb->ctx.op = LIBAIO_OP_READ;
+	iocb->ctx.op = LIBCURVE_OP_READ;
 	iocb->ctx.cb = bs_curve_aio_callback;
 	return 0;
 }
@@ -319,95 +359,118 @@ static int bs_curve_io_prep_pwrite(struct bs_curve_info *info,
 	iocb->ctx.offset = iocb->cmd->offset;
 	iocb->ctx.length = scsi_get_out_length(iocb->cmd);
 	iocb->ctx.buf = scsi_get_out_buffer(iocb->cmd);
-	iocb->ctx.op = LIBAIO_OP_WRITE;
+	iocb->ctx.op = LIBCURVE_OP_WRITE;
 	iocb->ctx.cb = bs_curve_aio_callback;
 	return 0;
 }
 
+static void bs_curve_aio_write_same_callback(struct CurveAioContext* curve_ctx);
 static int bs_curve_io_prep_write_same_2(struct bs_curve_info *info,
-		bs_curve_iocb_t *iocb);
+		bs_curve_iocb_t *iocb)
+{
+	struct scsi_cmd *cmd = iocb->cmd;
+	off_t offset = iocb->ws.offset;
+	size_t blocksize = 1 << cmd->dev->blk_shift;
 
-static void bs_curve_aio_write_same_callback(struct NebdClientAioContext* curve_ctx)
+	for (int i = 0; i < WRITE_SAME_DUP_BLOCKS; ++i) {
+		char *tmpbuf = iocb->ws.tmpbuf + i * blocksize;
+		off_t tmpoff = offset + i * blocksize;
+		switch(cmd->scb[1] & 0x06) {
+		case 0x02: /* PBDATA==0 LBDATA==1 */
+			put_unaligned_be32(tmpoff, tmpbuf);
+			break;
+		case 0x04: /* PBDATA==1 LBDATA==0 */
+			/* physical sector format */
+			put_unaligned_be64(tmpoff, tmpbuf);
+			break;
+		}
+	}
+	iocb->ctx.offset = iocb->ws.offset;
+	iocb->ctx.length = min(iocb->ws.tl, WRITE_SAME_DUP_BLOCKS * blocksize);
+	iocb->ctx.buf = iocb->ws.tmpbuf;
+	iocb->ctx.op = LIBCURVE_OP_WRITE;
+	iocb->ctx.cb = bs_curve_aio_write_same_callback;
+	return 0;
+}
+
+static void bs_curve_aio_write_same_callback(struct CurveAioContext* curve_ctx)
 {
 	bs_curve_iocb_t *iocb = container_of(curve_ctx, bs_curve_iocb_t, ctx);
 	struct scsi_cmd *cmd = iocb->cmd;
 	struct bs_curve_info *info = iocb->info;
-	int64_t count = 1;
-	size_t blocksize = (1 << cmd->dev->blk_shift);
+	int result = SAM_STAT_GOOD;
+	uint8_t key = 0;
+	uint16_t asc = 0;
 
-	iocb->ws.tl -= blocksize;
-	iocb->ws.offset += blocksize;
+	// update WRITE_SAME state machine
+	iocb->ws.tl -= iocb->ctx.length;
+	iocb->ws.offset += iocb->ctx.length;
 
-	if (iocb->ws.tl <= 0 || iocb->ctx.ret != 0) {
+	if (iocb->ws.tl <= 0 || iocb->ctx.ret < 0) {
+		// complete or failure
 stop:
-		pthread_mutex_lock(&info->mutex);
-		bs_curve_deq_inflight_io(info, cmd);
-		int empty = bs_curve_enq_complete_io(info, cmd);
-		pthread_mutex_unlock(&info->mutex);
-		if (empty)
-			write(info->evt_fd, &count, 8);
+		free(iocb->ws.tmpbuf);
 
-		dprintf("write same complete: %d\n", iocb->ctx.ret);
+		if (iocb->ctx.ret < 0) {
+			eprintf("%s io error %p %x %d %d %ld %" PRIu64 ", %m\n", __func__,
+                        	cmd, cmd->scb[0], iocb->ctx.op, iocb->ctx.ret, iocb->ctx.length,
+				iocb->ctx.offset);
+			set_medium_error_w(&result, &key, &asc);
+			sense_data_build(cmd, key, asc);
+		}
+		scsi_set_result(cmd, result);
+		cmd_done(info, cmd);
 	} else {
+		// continue WRITE_SAME
 		bs_curve_io_prep_write_same_2(info, iocb);
-		if (nebd_lib_aio_pwrite(info->curve_fd, &iocb->ctx)) {
+		if (g_curve->AioWrite(info->curve_fd, &iocb->ctx, UserDataType::RawBuffer)) {
 			iocb->ctx.ret = -1;
 			goto stop;
 		}
 	}
 }
 
-static int bs_curve_io_prep_write_same_2(struct bs_curve_info *info,
-		bs_curve_iocb_t *iocb)
-{
-	struct scsi_cmd *cmd = iocb->cmd;
-	char *tmpbuf = scsi_get_out_buffer(cmd);
-	off_t offset = iocb->ws.offset;
-	size_t blocksize = 1 << cmd->dev->blk_shift;
-
-	switch(cmd->scb[1] & 0x06) {
-	case 0x02: /* PBDATA==0 LBDATA==1 */
-		put_unaligned_be32(offset, tmpbuf);
-		break;
-	case 0x04: /* PBDATA==1 LBDATA==0 */
-		/* physical sector format */
-		put_unaligned_be64(offset, tmpbuf);
-		break;
-	}
-
-	iocb->ctx.offset = iocb->ws.offset;
-	iocb->ctx.length = blocksize;
-	iocb->ctx.buf = tmpbuf;
-	iocb->ctx.op = LIBAIO_OP_WRITE;
-	iocb->ctx.cb = bs_curve_aio_write_same_callback;
-	return 0;
-}
-
 static int bs_curve_io_prep_write_same(struct bs_curve_info *info,
 		bs_curve_iocb_t *iocb)
 {
 	struct scsi_cmd *cmd = iocb->cmd;
-	char *tmpbuf = scsi_get_out_buffer(cmd);
+	char *buf = (char *)scsi_get_out_buffer(cmd);
 	off_t offset = cmd->offset;
 	size_t blocksize = (1 << cmd->dev->blk_shift);
 
 	iocb->ws.tl = cmd->tl;
+	if (iocb->ws.tl == 0) {
+		/*
+		 * A NUMBER OF BLOCKS value of zero requests that all
+		 * the remaining logical blocks on the medium be written.
+		 */
+		iocb->ws.tl = cmd->dev->size;
+	}
 	iocb->ws.offset = cmd->offset;
-
-	switch(cmd->scb[1] & 0x06) {
-	case 0x02: /* PBDATA==0 LBDATA==1 */
-		put_unaligned_be32(offset, tmpbuf);
-		break;
-	case 0x04: /* PBDATA==1 LBDATA==0 */
-		/* physical sector format */
-		put_unaligned_be64(offset, tmpbuf);
-		break;
+	iocb->ws.tmpbuf = (char *)malloc(blocksize * WRITE_SAME_DUP_BLOCKS);
+	if (iocb->ws.tmpbuf == NULL) {
+		eprintf("%s can not allocate memory", __func__);
+		return -1;	
+	}
+	for (int i = 0; i < WRITE_SAME_DUP_BLOCKS; ++i) {
+		char *tmpbuf = iocb->ws.tmpbuf + i * blocksize;
+		off_t tmpoff = offset + i * blocksize;
+		memcpy(tmpbuf, buf, blocksize);
+		switch(cmd->scb[1] & 0x06) {
+		case 0x02: /* PBDATA==0 LBDATA==1 */
+			put_unaligned_be32(tmpoff, tmpbuf);
+			break;
+		case 0x04: /* PBDATA==1 LBDATA==0 */
+			/* physical sector format */
+			put_unaligned_be64(tmpoff, tmpbuf);
+			break;
+		}
 	}
 
 	iocb->ctx.offset = iocb->ws.offset;
-	iocb->ctx.length = blocksize;
-	iocb->ctx.buf = tmpbuf;
-	iocb->ctx.op = LIBAIO_OP_WRITE;
+	iocb->ctx.length = min(iocb->ws.tl, WRITE_SAME_DUP_BLOCKS * blocksize);
+	iocb->ctx.buf = iocb->ws.tmpbuf;
+	iocb->ctx.op = LIBCURVE_OP_WRITE;
 	iocb->ctx.cb = bs_curve_aio_write_same_callback;
 	return 0;
 }
@@ -432,11 +495,14 @@ static void cmd_submit(struct bs_curve_info *info, struct scsi_cmd *cmd)
 	case WRITE_12:
 	case WRITE_16:
 		length = scsi_get_out_length(cmd);
-		iocb = calloc(1, sizeof(bs_curve_iocb_t));
+		iocb = (bs_curve_iocb_t *)calloc(1, sizeof(bs_curve_iocb_t));
 		iocb->cmd = cmd;
 		iocb->info = info;
-		bs_curve_io_prep_pwrite(info, iocb);
-		if (nebd_lib_aio_pwrite(info->curve_fd, &iocb->ctx)) {
+		if (bs_curve_io_prep_pwrite(info, iocb)) {
+			set_medium_error_w(&result, &key, &asc);
+			break;
+		}
+		if (g_curve->AioWrite(info->curve_fd, &iocb->ctx, UserDataType::RawBuffer)) {
 			set_medium_error_w(&result, &key, &asc);
 			break;
 		}
@@ -446,11 +512,14 @@ static void cmd_submit(struct bs_curve_info *info, struct scsi_cmd *cmd)
 	case READ_12:
 	case READ_16:
 		length = scsi_get_in_length(cmd);
-		iocb = calloc(1, sizeof(bs_curve_iocb_t));
+		iocb = (bs_curve_iocb_t *)calloc(1, sizeof(bs_curve_iocb_t));
 		iocb->cmd = cmd;
 		iocb->info = info;
-		bs_curve_io_prep_pread(info, iocb);
-		if (nebd_lib_aio_pread(info->curve_fd, &iocb->ctx)) {
+		if (bs_curve_io_prep_pread(info, iocb)) {
+			set_medium_error_w(&result, &key, &asc);
+			break;
+		}
+		if (g_curve->AioRead(info->curve_fd, &iocb->ctx, UserDataType::RawBuffer)) {
 			set_medium_error_r(&result, &key, &asc);
 			break;
 		}
@@ -468,11 +537,14 @@ static void cmd_submit(struct bs_curve_info *info, struct scsi_cmd *cmd)
 			 cmd->offset, scsi_get_out_length(cmd), cmd->tl);
 
 		length = cmd->tl;
-		iocb = calloc(1, sizeof(bs_curve_iocb_t));
+		iocb = (bs_curve_iocb_t *)calloc(1, sizeof(bs_curve_iocb_t));
 		iocb->cmd = cmd;
 		iocb->info = info;
-		bs_curve_io_prep_write_same(info, iocb);
-		if (nebd_lib_aio_pwrite(info->curve_fd, &iocb->ctx)) {
+		if (bs_curve_io_prep_write_same(info, iocb)) {
+			set_medium_error_w(&result, &key, &asc);
+			break;
+		}
+		if (g_curve->AioWrite(info->curve_fd, &iocb->ctx, UserDataType::RawBuffer)) {
 			set_medium_error_w(&result, &key, &asc);
 			break;
 		}
@@ -506,41 +578,56 @@ static int bs_curve_cmd_submit(struct scsi_cmd *cmd)
 
 	pthread_mutex_lock(&info->pending_lock);
 	list_add_tail(&cmd->bs_list, &info->cmd_pending_list);
-	pthread_cond_signal(&info->pending_cond);
 	pthread_mutex_unlock(&info->pending_lock);
+	pthread_cond_signal(&info->pending_cond);
 
 	return 0;
 }
 
-static int bs_curve_open(struct scsi_lu *lu, char *path, int *fd, uint64_t *size)
+static int bs_curve_open(struct scsi_lu *lu, char *dev, int *fd, uint64_t *size)
 {
+	char path[PATH_MAX];
 	struct bs_curve_info *info = BS_CURVE_I(lu);
-	NebdOpenFlags openflags;
 	int ret, afd;
 	uint32_t blksize = 0;
+	int64_t curve_size = 0;
+	OpenFlags openflags;
 
-	memset(&openflags, 0, sizeof(openflags));
-	openflags.exclusive = 0;
-	info->curve_fd = nebd_lib_open_with_flags(path, &openflags);
+	ret = tgt_curvedev_get_path(dev, path);
+	if (ret != 0) {
+		eprintf("curvedev get path, errno=%d\n", ret);
+		return -1;
+	}
+
+	openflags.exclusive = false;
+	info->curve_fd = g_curve->Open(path, openflags);
 	if (info->curve_fd < 0) {
 		eprintf("can not open curve volume %s, %s\n", path, strerror(errno));
 		return -1;
 	}
 	blksize = 4096; //FIXME
 
-	eprintf("opened curve volume %s for tgt:%d lun:%"PRId64 ", curve_fd:%d\n",
-		 path, info->lu->tgt->tid, info->lu->lun, info->curve_fd);
+	curve_size = g_curve->StatFile(path);
+	if (curve_size < 0) {
+		g_curve->Close(info->curve_fd);
+        	info->curve_fd = -1;
+	    	eprintf("failed to StateFile %s\n", path);
+		return -1;
+	}
 
-	*size = nebd_lib_filesize(info->curve_fd);
+	eprintf("opened curve volume %s for tgt:%d lun:%" PRId64 ", curve_fd:%d, size:%zd\n",
+		 path, info->lu->tgt->tid, info->lu->lun, info->curve_fd, curve_size);
+
+	*size = curve_size;
 
 	afd = eventfd(0, O_NONBLOCK);
 	if (afd < 0) {
-		eprintf("failed to create eventfd for tgt:%d lun:%"PRId64 ", %m\n",
+		eprintf("failed to create eventfd for tgt:%d lun:%" PRId64 ", %m\n",
 			info->lu->tgt->tid, info->lu->lun);
 		ret = afd;
 		goto close_curve;
 	}
-	dprintf("eventfd:%d for tgt:%d lun:%"PRId64 "\n",
+	dprintf("eventfd:%d for tgt:%d lun:%" PRId64 "\n",
 		afd, info->lu->tgt->tid, info->lu->lun);
 
 	ret = tgt_event_insert(lu->tgt->evloop, afd, EPOLLIN, bs_curve_get_completions, info);
@@ -555,20 +642,23 @@ static int bs_curve_open(struct scsi_lu *lu, char *path, int *fd, uint64_t *size
 	 * to chunk servers will be persisted on disk immediately.
 	 */
 	lu->attrs.dpofua = 1;
-
+	info->curve_name = strdup(path);
 	ret = thread_group_open(info, 1);
 	if (ret != 0)
 		goto delete_event;
 	return 0;
 
 delete_event:
+	info->curve_name = NULL;
 	tgt_event_delete(lu->tgt->evloop, afd);
 close_eventfd:
 	close(afd);
 	info->evt_fd = -1;
 close_curve:
-	nebd_lib_close(info->curve_fd);
+	g_curve->Close(info->curve_fd);
 	info->curve_fd = -1;
+	free(info->curve_name);
+	info->curve_name = NULL;
 	return ret;
 }
 
@@ -578,38 +668,21 @@ static void bs_curve_close(struct scsi_lu *lu)
 
 	thread_group_close(info);
 	if (info->curve_fd >= 0) {
-		nebd_lib_close(info->curve_fd);
+		g_curve->Close(info->curve_fd);
 		info->curve_fd = -1;
 	}
 	if (info->evt_fd >= 0) {
 		tgt_event_delete(lu->tgt->evloop, info->evt_fd);
 		info->evt_fd = -1;
 	}
-}
-
-static int
-init_curve_nebd(void)
-{
-	static int nebd_inited;
-	int ret = 0;
-
-	if (nebd_inited)
-		return 0;
-
-	if (nebd_lib_init()) {
-		eprintf("can not init nebd client, errno=%d\n", errno);
-		ret = -1;
-	} else {
-		nebd_inited = 1;
-	}
-	return ret;
+	free(info->curve_name);
 }
 
 static tgtadm_err bs_curve_init(struct scsi_lu *lu, char *bsopts)
 {
 	struct bs_curve_info *info = BS_CURVE_I(lu);
 
-	if (init_curve_nebd())
+	if (tgt_init_curve())
 		return TGTADM_UNKNOWN_ERR;
 
 	memset(info, 0, sizeof(*info));
@@ -630,8 +703,6 @@ static void bs_curve_exit(struct scsi_lu *lu)
 {
 	struct bs_curve_info *info = BS_CURVE_I(lu);
 
-	if (info->evt_fd >= 0)
-		close(info->evt_fd);
 	pthread_mutex_destroy(&info->mutex);
 	pthread_mutex_destroy(&info->pending_lock);
 	pthread_cond_destroy(&info->pending_cond);
@@ -640,23 +711,29 @@ static void bs_curve_exit(struct scsi_lu *lu)
 static int bs_curve_getlength(struct scsi_lu *lu, uint64_t *size)
 {
 	struct bs_curve_info *info = BS_CURVE_I(lu);
-	*size = nebd_lib_filesize(info->curve_fd);
-	return 0;
+	int64_t curve_size = g_curve->StatFile(info->curve_name);
+	if (curve_size >= 0) {
+		*size = curve_size;
+	    eprintf("StateFile %zd\n", curve_size);
+		return 0;
+	}
+	eprintf("failed to StateFile %s\n", info->curve_name);
+	return -1;
 }
 
 static struct backingstore_template curve_bst = {
 	.bs_name		= "curve",
 	.bs_datasize    	= sizeof(struct bs_curve_info),
-	.bs_init		= bs_curve_init,
-	.bs_exit		= bs_curve_exit,
 	.bs_open		= bs_curve_open,
 	.bs_close       	= bs_curve_close,
+	.bs_init		= bs_curve_init,
+	.bs_exit		= bs_curve_exit,
 	.bs_cmd_submit  	= bs_curve_cmd_submit,
 	.bs_getlength		= bs_curve_getlength,
 	.bs_oflags_supported    = O_SYNC | O_DIRECT
 };
 
-void register_bs_module(void)
+extern "C" void register_bs_module(void)
 {
 	unsigned char opcodes[] = {
 		ALLOW_MEDIUM_REMOVAL,
@@ -688,8 +765,8 @@ void register_bs_module(void)
 		WRITE_12,
 		WRITE_16,
 		WRITE_6,
-//		WRITE_SAME,
-//		WRITE_SAME_16
+		WRITE_SAME,
+		WRITE_SAME_16
 	};
 
 	bs_create_opcode_map(&curve_bst, opcodes, ARRAY_SIZE(opcodes));
