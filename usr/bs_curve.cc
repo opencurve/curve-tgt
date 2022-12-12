@@ -138,12 +138,17 @@ static void *thread_cmd_worker(void *arg)
 			pthread_mutex_unlock(&info->pending_lock);
 			break;
 		}
-		cmd = list_first_entry(&info->cmd_pending_list,
-				       struct scsi_cmd, bs_list);
-		list_del(&cmd->bs_list);
+
+		struct list_head temp_list;
+		INIT_LIST_HEAD(&temp_list);
+		list_splice_init(&info->cmd_pending_list, &temp_list);
 		pthread_mutex_unlock(&info->pending_lock);
 
-		cmd_submit(info, cmd);
+		while (!list_empty(&temp_list)) {
+			cmd = list_first_entry(&temp_list, struct scsi_cmd, bs_list);
+			list_del(&cmd->bs_list);
+			cmd_submit(info, cmd);
+		}
 	}
 
 	pthread_exit(NULL);
