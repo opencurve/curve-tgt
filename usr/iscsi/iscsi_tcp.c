@@ -31,6 +31,8 @@
 #include <netinet/tcp.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <linux/errqueue.h>
 
 #include "iscsid.h"
 #include "tgtd.h"
@@ -38,14 +40,24 @@
 #include "work.h"
 #include "target.h"
 
-static void iscsi_tcp_event_handler(struct tgt_evloop *evloop, int fd, int events, void *data);
-static void iscsi_tcp_release(struct iscsi_connection *conn);
-static struct iscsi_task *iscsi_tcp_alloc_task(struct iscsi_connection *conn,
-						size_t ext_len);
-static void iscsi_tcp_free_task(struct iscsi_task *task);
+/* The value is advised by linux kernel document msg_zerocopy.html */
+#define LINUX_ZEROCOPY_THRESHOLD (1024 * 10)
 
-static int listen_fds[8];
+static int g_enable_zerocopy = 1;
+static int listen_fds[128];
 static struct iscsi_transport iscsi_tcp;
+static LIST_HEAD(g_conn_gc_list);
+static pthread_mutex_t g_conn_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t g_gc_thread;
+static int g_gc_efd = -1;
+
+struct zerocopy_info {
+	struct list_head link;
+	char *buf;
+	size_t len;
+	uint64_t sn;
+	int free;
+};
 
 struct iscsi_tcp_connection {
 	int fd;
@@ -57,8 +69,73 @@ struct iscsi_tcp_connection {
 	int nop_count;
 	long ttt;
 
+	struct zerocopy {
+		int enable;
+		unsigned next_completion;
+		uint64_t completions;
+		uint64_t expected_completions;
+	} zerocopy;
+
 	struct iscsi_connection iscsi_conn;
+	struct list_head zc_buf_out_list;
+	struct list_head zc_buf_defer_free_list;
+	struct list_head zc_info_free_list;
+	struct timeval stamp;
 };
+
+static void iscsi_tcp_event_handler(struct tgt_evloop *evloop, int fd, int events, void *data);
+static void iscsi_tcp_release(struct iscsi_connection *conn);
+static struct iscsi_task *iscsi_tcp_alloc_task(struct iscsi_connection *conn,
+						size_t ext_len);
+static void iscsi_tcp_free_task(struct iscsi_task *task);
+static void iscsi_tcp_retire_bufs(struct iscsi_tcp_connection *conn);
+static int iscsi_tcp_show(struct iscsi_connection *conn, char *buf, int rest);
+
+static struct zerocopy_info *alloc_zerocopy_info(
+	struct iscsi_tcp_connection *conn)
+{
+	struct zerocopy_info *pos;
+
+	if (!list_empty(&conn->zc_info_free_list)) {
+		pos = list_first_entry(&conn->zc_info_free_list,
+			struct zerocopy_info, link);
+		list_del(&pos->link);
+		return pos;
+	}
+	return malloc(sizeof(*pos));
+}
+
+static void release_zerocopy_info(struct iscsi_tcp_connection *conn,
+	struct zerocopy_info *pos)
+{
+	list_add(&pos->link, &conn->zc_info_free_list);
+}
+
+static void free_zerocopy_info(struct iscsi_tcp_connection *conn)
+{
+	struct zerocopy_info *pos;
+
+	while (!list_empty(&conn->zc_info_free_list)) {
+		pos = list_first_entry(&conn->zc_info_free_list,
+			struct zerocopy_info, link);
+                list_del(&pos->link);
+		free(pos);
+	}
+	while (!list_empty(&conn->zc_buf_out_list)) {
+		pos = list_first_entry(&conn->zc_buf_out_list,
+			struct zerocopy_info, link);
+		free(pos->buf);
+		list_del(&pos->link);
+		free(pos);
+	}
+	while (!list_empty(&conn->zc_buf_defer_free_list)) {
+		pos = list_first_entry(&conn->zc_buf_defer_free_list,
+			struct zerocopy_info, link);
+		free(pos->buf);
+		list_del(&pos->link);
+		free(pos);
+	}
+}
 
 static inline struct iscsi_tcp_connection *TCP_CONN(struct iscsi_connection *conn)
 {
@@ -211,6 +288,16 @@ static int set_nodelay(int fd)
 	return ret;
 }
 
+static int set_zerocopy(int fd)
+{
+	int one = 1;
+	if (setsockopt(fd, SOL_SOCKET, SO_ZEROCOPY, &one, sizeof(one))) {
+		eprintf("setsockopt zerocopy failed, %d, %s", errno, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
 static void accept_connection(struct tgt_evloop *evloop, int afd, int events, void *data)
 {
 	struct iscsi_tcp_private *prv = tgt_event_userdata(evloop,
@@ -219,9 +306,7 @@ static void accept_connection(struct tgt_evloop *evloop, int afd, int events, vo
 	socklen_t namesize;
 	struct iscsi_connection *conn;
 	struct iscsi_tcp_connection *tcp_conn;
-	int fd, ret;
-
-	dprintf("%d\n", afd);
+	int fd, ret=0;
 
 	namesize = sizeof(from);
 	fd = accept(afd, (struct sockaddr *) &from, &namesize);
@@ -248,6 +333,9 @@ static void accept_connection(struct tgt_evloop *evloop, int afd, int events, vo
 	if (!tcp_conn)
 		goto out;
 
+	if (g_enable_zerocopy)
+		tcp_conn->zerocopy.enable = (set_zerocopy(fd) == 0);
+
 	conn = &tcp_conn->iscsi_conn;
 
 	ret = conn_init(conn);
@@ -255,7 +343,9 @@ static void accept_connection(struct tgt_evloop *evloop, int afd, int events, vo
 		free(tcp_conn);
 		goto out;
 	}
-
+	INIT_LIST_HEAD(&tcp_conn->zc_buf_out_list);
+	INIT_LIST_HEAD(&tcp_conn->zc_buf_defer_free_list);
+	INIT_LIST_HEAD(&tcp_conn->zc_info_free_list);
 	tcp_conn->fd = fd;
 	conn->evloop = evloop;
 	conn->tp = &iscsi_tcp;
@@ -278,12 +368,89 @@ out:
 	return;
 }
 
-static void do_iscsi_tcp_event_handler(struct tgt_evloop *evloop, int fd, int events, void *data,
-	int *closed)
+/* Receive zerocopy notification */
+static void iscsi_tcp_event_err_handler(struct iscsi_connection *conn_)
+{
+	struct iscsi_tcp_connection *conn = TCP_CONN(conn_);
+	struct sock_extended_err *serr;
+	struct msghdr msg = {};
+	struct cmsghdr *cm;
+	char control[100];
+	uint32_t hi, lo, range;
+	int ret, zerocopy;
+
+	msg.msg_control = control;
+	msg.msg_controllen = sizeof(control);
+	ret = recvmsg(conn->fd, &msg, MSG_ERRQUEUE);
+	if (ret == -1) {
+		if (errno != EAGAIN)
+			eprintf("recvmsg notification: failed, errno %d", errno);
+		return;
+	}
+	if (msg.msg_flags & MSG_CTRUNC) {
+		eprintf("recvmsg notification: truncated");
+		abort();
+		return;
+	}
+
+	cm = CMSG_FIRSTHDR(&msg);
+	if (!cm) {                                                               
+		eprintf("cmsg: no cmsg");                                   
+		abort();
+	}
+
+	if (!((cm->cmsg_level == SOL_IP && cm->cmsg_type == IP_RECVERR) ||
+				(cm->cmsg_level == SOL_IPV6 && cm->cmsg_type == IPV6_RECVERR))) {
+		eprintf("serr: wrong type: %d.%d", cm->cmsg_level, cm->cmsg_type); 
+		abort();
+	}
+
+	serr = (void *)CMSG_DATA(cm);
+	if (serr->ee_origin != SO_EE_ORIGIN_ZEROCOPY) {
+		eprintf("serr: wrong origin: %u", serr->ee_origin);
+		abort();
+	}
+	if (serr->ee_errno != 0) {
+		eprintf("serr: wrong error code: %u", serr->ee_errno);
+		abort();
+	}
+
+	hi = serr->ee_data;
+	lo = serr->ee_info;
+	range = hi - lo + 1;
+
+	/* Detect notification gaps. These should not happen often, if at all.
+	 * Gaps can occur due to drops, reordering and retransmissions.         
+	 */
+	if (lo != conn->zerocopy.next_completion) {
+		eprintf("gap: %u..%u does not append to %u\n",
+				lo, hi, conn->zerocopy.next_completion);
+	}
+	conn->zerocopy.next_completion = hi + 1;
+
+	zerocopy = !(serr->ee_code & SO_EE_CODE_ZEROCOPY_COPIED);
+	if (!zerocopy) {
+		char addr[128];
+		addr[0] = 0;
+		iscsi_tcp_show(conn_, addr, sizeof(addr));
+		eprintf("peer %s, SO_EE_CODE_ZEROCOPY_COPIED detected, disabling zerocopy\n", addr);
+		conn->zerocopy.enable = 0; /* disable zerocopy */
+	}
+
+	conn->zerocopy.completions += range;
+
+	iscsi_tcp_retire_bufs(conn);
+}
+
+static void do_iscsi_tcp_event_handler(struct tgt_evloop *evloop, int fd,
+	int events, void *data, int *closed)
 {
 	struct iscsi_connection *conn = (struct iscsi_connection *) data;
 
 	*closed = 0;
+
+	if (events & EPOLLERR)
+		iscsi_tcp_event_err_handler(conn);
 
 	if (events & EPOLLIN)
 		iscsi_rx_handler(conn);
@@ -543,7 +710,7 @@ static void iscsi_tcp_migrate_evloop(
 	struct iscsi_connection *conn, struct tgt_evloop *old, struct tgt_evloop *new)
 {
 	struct iscsi_tcp_connection *tcp_conn = TCP_CONN(conn);
-	//struct iscsi_tcp_private *old_prv = tgt_event_userdata(old, EV_DATA_TCPIP);
+	/* struct iscsi_tcp_private *old_prv = tgt_event_userdata(old, EV_DATA_TCPIP); */
 	struct iscsi_tcp_private *new_prv = tgt_event_userdata(new, EV_DATA_TCPIP);
 
 	list_del_init(&tcp_conn->tcp_conn_siblings);
@@ -561,6 +728,68 @@ static size_t iscsi_tcp_read(struct iscsi_connection *conn, void *buf,
 	return read(tcp_conn->fd, buf, nbytes);
 }
 
+static void iscsi_tcp_start_output_buf(struct iscsi_connection *conn,
+	char *buf, size_t len)
+{
+	struct iscsi_tcp_connection *tcp_conn = TCP_CONN(conn);
+	struct zerocopy_info *pos;
+
+	if (len < LINUX_ZEROCOPY_THRESHOLD) {
+		return;
+	}
+
+	if (!tcp_conn->zerocopy.enable) {
+		return;
+	}
+
+	/* Normally we only have one buffer inflight */
+	list_for_each_entry(pos, &tcp_conn->zc_buf_out_list, link) {
+		if (pos->buf == buf)
+			return;
+	}
+
+	pos = alloc_zerocopy_info(tcp_conn);
+	if (pos == NULL)
+		return;
+
+	pos->buf = buf;
+	pos->len = len;
+	pos->sn = 0;
+	pos->free = 0;
+	list_add(&pos->link, &tcp_conn->zc_buf_out_list);
+}
+
+static struct zerocopy_info *iscsi_tcp_find_out_buf(
+	struct iscsi_tcp_connection *tcp_conn, void *addr)
+{
+	struct zerocopy_info *pos;
+
+	list_for_each_entry(pos, &tcp_conn->zc_buf_out_list, link) {
+		if ((char *)addr >= pos->buf &&
+                    (char *)addr < pos->buf + pos->len) {
+			return pos;
+		}
+	}
+
+	return NULL;
+}
+
+static void iscsi_tcp_retire_bufs(struct iscsi_tcp_connection *conn)
+{
+	struct zerocopy_info *pos, *next;
+
+	list_for_each_entry_safe(pos, next, &conn->zc_buf_defer_free_list,
+	    link) {
+		if (conn->zerocopy.completions >= pos->sn) {
+			list_del(&pos->link);
+			free(pos->buf);
+			release_zerocopy_info(conn, pos);
+		} else {
+			break;
+		}
+	}
+}
+
 static size_t iscsi_tcp_write_begin(struct iscsi_connection *conn, void *buf,
 				    size_t nbytes)
 {
@@ -568,6 +797,36 @@ static size_t iscsi_tcp_write_begin(struct iscsi_connection *conn, void *buf,
 	int opt = 1;
 
 	setsockopt(tcp_conn->fd, SOL_TCP, TCP_CORK, &opt, sizeof(opt));
+	if (tcp_conn->zerocopy.enable && nbytes >= LINUX_ZEROCOPY_THRESHOLD) {
+		ssize_t ret = 0;
+		struct zerocopy_info *out_buf = NULL;
+		struct iovec iov = {.iov_base = buf, .iov_len = nbytes};
+		struct msghdr msg = {0};
+
+		msg.msg_iov = &iov;
+		msg.msg_iovlen = 1;
+
+		out_buf = iscsi_tcp_find_out_buf(tcp_conn, buf);
+		if (!out_buf)
+			goto write;
+		ret = sendmsg(tcp_conn->fd, &msg, MSG_ZEROCOPY|MSG_DONTWAIT);
+		if (ret == -1) {
+			if (errno == ENOBUFS) {
+				/* turn off zerocopy */
+				eprintf("got ENOBUFS, turn of zerocopy\n");
+				tcp_conn->zerocopy.enable = 0;
+				goto write;
+			}
+			return ret;
+		}
+		if (ret > 0) {
+			tcp_conn->zerocopy.expected_completions++;
+			out_buf->sn = tcp_conn->zerocopy.expected_completions;
+		}
+		return ret;
+	}
+
+write:
 	return write(tcp_conn->fd, buf, nbytes);
 }
 
@@ -587,14 +846,51 @@ static size_t iscsi_tcp_close(struct iscsi_connection *conn)
 	return 0;
 }
 
+static int iscsi_tcp_zerocopy_finished(struct iscsi_tcp_connection *tcp_conn)
+{
+	return list_empty(&tcp_conn->zc_buf_out_list) &&
+	       list_empty(&tcp_conn->zc_buf_defer_free_list);
+}
+
+static void iscsi_tcp_free(struct iscsi_tcp_connection *tcp_conn)
+{
+	close(tcp_conn->fd);
+	free_zerocopy_info(tcp_conn);
+	free(tcp_conn);
+}
+
+static void iscsi_tcp_gc_free(struct iscsi_tcp_connection *tcp_conn)
+{
+	list_del(&tcp_conn->tcp_conn_siblings);
+	iscsi_tcp_free(tcp_conn);
+}
+
 static void iscsi_tcp_release(struct iscsi_connection *conn)
 {
 	struct iscsi_tcp_connection *tcp_conn = TCP_CONN(conn);
 
 	conn_exit(conn);
-	close(tcp_conn->fd);
 	list_del(&tcp_conn->tcp_conn_siblings);
-	free(tcp_conn);
+	if (iscsi_tcp_zerocopy_finished(tcp_conn)) {
+		iscsi_tcp_free(tcp_conn);
+	} else {
+		struct epoll_event evt;
+
+		shutdown(tcp_conn->fd, SHUT_RD);
+
+		/* add to gc list */
+		pthread_mutex_lock(&g_conn_gc_mutex);
+		list_add(&tcp_conn->tcp_conn_siblings, &g_conn_gc_list);
+		gettimeofday(&tcp_conn->stamp, NULL);
+		pthread_mutex_unlock(&g_conn_gc_mutex);
+
+    		evt.data.ptr = tcp_conn;
+		evt.events = EPOLLERR;
+		if (epoll_ctl(g_gc_efd, EPOLL_CTL_ADD, tcp_conn->fd, &evt)) {
+			eprintf("%s, epoll_ctl failed\n", __func__);
+			abort();
+		}
+	}
 }
 
 static int iscsi_tcp_show(struct iscsi_connection *conn, char *buf, int rest)
@@ -655,8 +951,42 @@ static void *iscsi_tcp_alloc_data_buf(struct iscsi_connection *conn, size_t sz)
 	return valloc(sz);
 }
 
+static void add_defer_list(struct iscsi_tcp_connection *tcp_conn, struct zerocopy_info *buf)
+{
+	struct zerocopy_info *pos;
+
+	list_for_each_entry_reverse(pos, &tcp_conn->zc_buf_defer_free_list,
+	    link) {
+		if (buf->sn >= pos->sn) {
+			list_add(&buf->link, &pos->link);
+			buf->free = 1;
+			return;
+		}
+	}
+
+	/* sn is smallest or list empty, add at front */
+	list_add(&buf->link, &tcp_conn->zc_buf_defer_free_list);
+}
+ 
 static void iscsi_tcp_free_data_buf(struct iscsi_connection *conn, void *buf)
 {
+	struct iscsi_tcp_connection *tcp_conn = TCP_CONN(conn);
+	struct zerocopy_info *pos;
+
+	list_for_each_entry(pos, &tcp_conn->zc_buf_out_list, link) {
+		if (pos->buf == buf) {
+			if (tcp_conn->zerocopy.completions >= pos->sn) {
+				list_del(&pos->link);
+				release_zerocopy_info(tcp_conn, pos);
+				break;
+			} else {
+				list_del(&pos->link);
+				add_defer_list(tcp_conn, pos);
+				return;
+			}
+		}
+	}
+
 	if (buf)
 		free(buf);
 }
@@ -702,6 +1032,70 @@ void iscsi_print_nop_settings(struct concat_buf *b, int tid)
 	}
 }
 
+static int iscsi_tcp_param_parser_zerocopy(char *p)
+{
+	g_enable_zerocopy = atoi(p);
+	return 0;
+}
+
+static void iscsi_tcp_gc_handle_input(int ev, void *ptr)
+{
+	struct iscsi_tcp_connection *conn = (struct iscsi_tcp_connection *)ptr;
+
+	iscsi_tcp_event_err_handler(&conn->iscsi_conn);
+
+	// update stamp
+	gettimeofday(&conn->stamp, NULL);
+	if (iscsi_tcp_zerocopy_finished(conn)) {
+		pthread_mutex_lock(&g_conn_gc_mutex);
+		iscsi_tcp_gc_free(conn);
+		pthread_mutex_unlock(&g_conn_gc_mutex);
+	}
+}
+
+static void iscsi_tcp_gc_test_timeout(void)
+{
+	const struct timeval timeout = {20, 0};
+	struct timeval now;
+	struct iscsi_tcp_connection *conn, *next;
+
+	pthread_mutex_lock(&g_conn_gc_mutex);
+	gettimeofday(&now, NULL);
+	list_for_each_entry_safe(conn, next, &g_conn_gc_list, tcp_conn_siblings) {
+		struct timeval result;
+
+		timeradd(&conn->stamp, &timeout, &result);
+		if (timercmp(&now, &result, >)) {
+			eprintf("Connection gc timeout, %p\n", conn);
+			iscsi_tcp_gc_free(conn);
+		}
+	}
+	pthread_mutex_unlock(&g_conn_gc_mutex);
+}
+
+static void *iscsi_tcp_gc_loop(void *arg)
+{
+	const int POLL_SIZE = 6;
+	struct epoll_event e[POLL_SIZE];
+	int i, n;
+
+	for (;;) {
+		n = epoll_wait(g_gc_efd, e, POLL_SIZE, 1000);
+		for (i = 0; i < n; ++i) {
+			iscsi_tcp_gc_handle_input(e[i].events, e[i].data.ptr);
+		}
+		iscsi_tcp_gc_test_timeout();
+	}
+
+	return NULL;
+}
+
+static void iscsi_tcp_setup_gc(void)
+{
+	g_gc_efd = epoll_create1(O_CLOEXEC);
+	pthread_create(&g_gc_thread, NULL, iscsi_tcp_gc_loop, NULL);
+}
+
 static struct iscsi_transport iscsi_tcp = {
 	.name			= "iscsi",
 	.rdma			= 0,
@@ -726,10 +1120,13 @@ static struct iscsi_transport iscsi_tcp = {
 	.ep_nop_reply		= iscsi_tcp_nop_reply,
 	.ep_init_evloop		= iscsi_tcp_init_evloop,
 	.ep_fini_evloop		= iscsi_tcp_fini_evloop,
-	.ep_migrate_evloop	= iscsi_tcp_migrate_evloop
+	.ep_migrate_evloop	= iscsi_tcp_migrate_evloop,
+	.ep_start_output_buf	= iscsi_tcp_start_output_buf
 };
 
 __attribute__((constructor)) static void iscsi_transport_init(void)
 {
 	iscsi_transport_register(&iscsi_tcp);
+	setup_param("tcp_zerocopy", iscsi_tcp_param_parser_zerocopy);
+	iscsi_tcp_setup_gc();
 }

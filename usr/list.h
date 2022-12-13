@@ -57,6 +57,23 @@ static inline int list_empty(const struct list_head *head)
 	     &pos->member != (head); 					\
 	     pos = n, n = list_entry(n->member.next, typeof(*n), member))
 
+#define list_first_entry(ptr, type, member) \
+        list_entry((ptr)->next, type, member)
+
+#define list_last_entry(ptr, type, member) \
+        list_entry((ptr)->prev, type, member)
+
+#define list_entry_is_head(pos, head, member)                           \
+        (&pos->member == (head))
+
+#define list_prev_entry(pos, member) \
+        list_entry((pos)->member.prev, typeof(*(pos)), member)
+
+#define list_for_each_entry_reverse(pos, head, member)                  \
+        for (pos = list_last_entry(head, typeof(*pos), member);         \
+             !list_entry_is_head(pos, head, member);                    \
+             pos = list_prev_entry(pos, member))
+
 static inline void __list_add(struct list_head *new_,
 			      struct list_head *prev,
 			      struct list_head *next)

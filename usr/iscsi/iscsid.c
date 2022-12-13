@@ -1182,6 +1182,11 @@ static int iscsi_data_rsp_build(struct iscsi_task *task)
 
 	task->offset += datalen;
 
+	if (conn->tp->ep_start_output_buf) {
+		conn->tp->ep_start_output_buf(conn,
+			scsi_get_in_buffer(&task->scmd),
+			scsi_get_in_length(&task->scmd));
+	}
 	return 0;
 }
 
