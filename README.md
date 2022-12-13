@@ -149,11 +149,24 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 
 为tgt提供了访问curve的驱动，详见doc/README.curve， 这样用户就可以在任何支持iscsi的操作系统上使用curve块设备存储，例如Windows。
 
-## 5. 关于iser
+## 5. Zero Copy
+
+修改后的版本支持Linux TCP send的MSG_ZEROCOPY零拷贝技术。在我们使用fio的测试中,
+16KB块大小128深度的随机读比没有是使用zerocopy技术的系统提升了25%的性能。
+
+Linux的TCP zerocopy发送技术需要使用较多的optmem，实际环境中往往需要调大参数，例如:
+   sysctl -w net.core.optmem_max=1048576
+
+Linux的TCP zerocopy发送技术也与ulimit的max locked memory相关，需要相应增大这个参数，否则tgt在遇到NOBUFS会停止使用zerocopy。
+
+某些情况下需要关闭zerocopy, 可以使用--tcp_zerocopy 0参数，例如：<br>
+tgtd --tcp_zerocopy 0
+
+## 6. 关于iser
 
 iser target服务目前依然归属于主线程服务，因为我们还不具备测试RDMA的条件，所以这部分代码 还没有修改。
 
-## 6. 性能对比
+## 7. 性能对比
 
 我们为tgt配置了3块盘，一块curvebs卷，两块本地盘
 
@@ -209,11 +222,10 @@ size=10G
 下面是经过多线程优化的fio成绩，IOPS 60.9K
 ![image](images/fio_opt.png)
 
-## 7. Windows测试
+## 8. Windows测试
 
 本系统对Windows经过初步测试，工作良好。具体怎么在Windows上配置iscsi客户端，可以参照：<A>https://jingyan.baidu.com/article/e4511cf37feade2b845eaff8.html</A>
 
-## 8. CHAP
+## 9. CHAP
 
 在Windows上设置CHAP认证时，请注意机密必须包含12到16个字符，要在tgt和Windows上保持一致。
-

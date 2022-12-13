@@ -73,12 +73,13 @@ typedef struct bs_curve_iocb {
 	struct scsi_cmd *cmd;
 	struct bs_curve_info *info;
 
-#define WRITE_SAME_DUP_BLOCKS	8
+#define WRITE_SAME_MAX_DUP 128
 	struct write_same {
-		uint64_t tl;
 		uint64_t offset;
+		uint32_t tl;
+		uint32_t tmplen;
 		char *tmpbuf;
-	}ws;
+	} ws;
 } bs_curve_iocb_t;
 
 using namespace curve::client;
@@ -376,8 +377,9 @@ static int bs_curve_io_prep_write_same_2(struct bs_curve_info *info,
 	struct scsi_cmd *cmd = iocb->cmd;
 	off_t offset = iocb->ws.offset;
 	size_t blocksize = 1 << cmd->dev->blk_shift;
+        int tmpblockcount = (iocb->ws.tmplen >> cmd->dev->blk_shift);
 
-	for (int i = 0; i < WRITE_SAME_DUP_BLOCKS; ++i) {
+	for (int i = 0; i < tmpblockcount; ++i) {
 		char *tmpbuf = iocb->ws.tmpbuf + i * blocksize;
 		off_t tmpoff = offset + i * blocksize;
 		switch(cmd->scb[1] & 0x06) {
@@ -391,7 +393,7 @@ static int bs_curve_io_prep_write_same_2(struct bs_curve_info *info,
 		}
 	}
 	iocb->ctx.offset = iocb->ws.offset;
-	iocb->ctx.length = min(iocb->ws.tl, WRITE_SAME_DUP_BLOCKS * blocksize);
+	iocb->ctx.length = min(iocb->ws.tl, iocb->ws.tmplen);
 	iocb->ctx.buf = iocb->ws.tmpbuf;
 	iocb->ctx.op = LIBCURVE_OP_WRITE;
 	iocb->ctx.cb = bs_curve_aio_write_same_callback;
@@ -441,7 +443,8 @@ static int bs_curve_io_prep_write_same(struct bs_curve_info *info,
 	struct scsi_cmd *cmd = iocb->cmd;
 	char *buf = (char *)scsi_get_out_buffer(cmd);
 	off_t offset = cmd->offset;
-	size_t blocksize = (1 << cmd->dev->blk_shift);
+	uint32_t blocksize = (1 << cmd->dev->blk_shift);
+	int tmpblockcount = 0;
 
 	iocb->ws.tl = cmd->tl;
 	if (iocb->ws.tl == 0) {
@@ -451,13 +454,15 @@ static int bs_curve_io_prep_write_same(struct bs_curve_info *info,
 		 */
 		iocb->ws.tl = cmd->dev->size;
 	}
+	iocb->ws.tmplen = min(cmd->tl, blocksize * WRITE_SAME_MAX_DUP);
 	iocb->ws.offset = cmd->offset;
-	iocb->ws.tmpbuf = (char *)malloc(blocksize * WRITE_SAME_DUP_BLOCKS);
+	iocb->ws.tmpbuf = (char *)malloc(iocb->ws.tmplen);
 	if (iocb->ws.tmpbuf == NULL) {
 		eprintf("%s can not allocate memory", __func__);
-		return -1;	
+		return -1;
 	}
-	for (int i = 0; i < WRITE_SAME_DUP_BLOCKS; ++i) {
+	tmpblockcount = iocb->ws.tmplen >> (cmd->dev->blk_shift);
+	for (int i = 0; i < tmpblockcount; ++i) {
 		char *tmpbuf = iocb->ws.tmpbuf + i * blocksize;
 		off_t tmpoff = offset + i * blocksize;
 		memcpy(tmpbuf, buf, blocksize);
@@ -473,7 +478,7 @@ static int bs_curve_io_prep_write_same(struct bs_curve_info *info,
 	}
 
 	iocb->ctx.offset = iocb->ws.offset;
-	iocb->ctx.length = min(iocb->ws.tl, WRITE_SAME_DUP_BLOCKS * blocksize);
+	iocb->ctx.length = min(iocb->ws.tl, iocb->ws.tmplen);
 	iocb->ctx.buf = iocb->ws.tmpbuf;
 	iocb->ctx.op = LIBCURVE_OP_WRITE;
 	iocb->ctx.cb = bs_curve_aio_write_same_callback;
