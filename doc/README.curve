@@ -90,3 +90,16 @@ Also, you need to logout and login tgt again:
 	# iscsiadm -m node --portal 127.0.0.1:3260 --logout
 	# iscsiadm -m node --portal 127.0.0.1:3260 --login
 
+6. Tuning zerocopy
+
+The curve tgt uses Linux MSG_ZEROCOPY socket option to send data with zerocopy
+technology, it may requires more memory, and you can tune kernel option
+net.core.optmem_max, for example:
+	sysctl -w net.core.optmem_max=1048576
+if tgt gets ENOBUF error, it will print "got ENOBUFS, turn off zerocopy", the
+zerocopy is not used.
+
+Sometimes, you may want to turn off zerocopy completly, you can pass option
+tcp_zerocopy to tgt with:
+	tgt --tcp_zerocopy 0
+
