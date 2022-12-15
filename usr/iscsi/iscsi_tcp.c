@@ -834,7 +834,7 @@ static size_t iscsi_tcp_write_begin(struct iscsi_connection *conn, void *buf,
 		if (ret == -1) {
 			if (errno == ENOBUFS) {
 				/* turn off zerocopy */
-				eprintf("got ENOBUFS, turn of zerocopy\n");
+				eprintf("got ENOBUFS, turn off zerocopy\n");
 				tcp_conn->zerocopy.enable = 0;
 				goto write;
 			}
