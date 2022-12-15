@@ -99,7 +99,10 @@ net.core.optmem_max, for example:
 if tgt gets ENOBUF error, it will print "got ENOBUFS, turn off zerocopy", the
 zerocopy is not used.
 
+MSG_ZEROCOPY also uses more locked memory, you can turn it ulimit -l.
+
 Sometimes, you may want to turn off zerocopy completly, you can pass option
 tcp_zerocopy to tgt with:
 	tgt --tcp_zerocopy 0
+
 
