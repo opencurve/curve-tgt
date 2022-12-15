@@ -290,8 +290,13 @@ static int set_nodelay(int fd)
 
 static int set_zerocopy(int fd)
 {
+	static int not_supported;
+
 	int one = 1;
+	if (not_supported)
+		return -1;
 	if (setsockopt(fd, SOL_SOCKET, SO_ZEROCOPY, &one, sizeof(one))) {
+		not_supported = 1;
 		eprintf("setsockopt zerocopy failed, %d, %s", errno, strerror(errno));
 		return -1;
 	}
