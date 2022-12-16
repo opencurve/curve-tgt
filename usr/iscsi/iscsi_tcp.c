@@ -435,10 +435,9 @@ static void iscsi_tcp_event_err_handler(struct iscsi_connection *conn_)
 
 	zerocopy = !(serr->ee_code & SO_EE_CODE_ZEROCOPY_COPIED);
 	if (!zerocopy) {
-		char addr[128];
-		addr[0] = 0;
+		char addr[128] = {0};
 		iscsi_tcp_show(conn_, addr, sizeof(addr));
-		eprintf("peer %s, SO_EE_CODE_ZEROCOPY_COPIED detected, disabling zerocopy\n", addr);
+		eprintf("Peer %s, SO_EE_CODE_ZEROCOPY_COPIED detected, disabling zerocopy\n", addr);
 		conn->zerocopy.enable = 0; /* disable zerocopy */
 	}
 
@@ -839,7 +838,9 @@ static size_t iscsi_tcp_write_begin(struct iscsi_connection *conn, void *buf,
 		if (ret == -1) {
 			if (errno == ENOBUFS) {
 				/* turn off zerocopy */
-				eprintf("got ENOBUFS, turn off zerocopy\n");
+				char addr[128] = {0};
+				iscsi_tcp_show(conn, addr, sizeof(addr));
+				eprintf("Peer %s, got ENOBUFS, turn off zerocopy\n", addr);
 				tcp_conn->zerocopy.enable = 0;
 				goto write;
 			}
