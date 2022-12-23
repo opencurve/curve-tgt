@@ -23,6 +23,8 @@ struct tgt_account {
 	int *in_aids;
 };
 
+
+RB_HEAD(lun_tree, scsi_lu);
 struct target {
 	char *name;
 
@@ -34,6 +36,8 @@ struct target {
 	struct list_head target_siblings;
 
 	struct list_head device_list;
+
+	struct lun_tree device_tree;
 
 	struct list_head it_nexus_list;
 
