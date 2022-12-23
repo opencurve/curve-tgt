@@ -51,7 +51,7 @@ static tgtadm_err do_tgt_device_destroy(int tid, uint64_t lun, int force,
 
 static int lun_cmp(struct scsi_lu *a, struct scsi_lu *b);
 
-RB_PROTOTYPE(lun_tree, scsi_lu, tnode,);
+RB_PROTOTYPE_STATIC(lun_tree, scsi_lu, tnode,);
 RB_GENERATE2(lun_tree, scsi_lu, tnode, lun_cmp, uint64_t, lun);
 
 static int lun_cmp(struct scsi_lu *a, struct scsi_lu *b)
