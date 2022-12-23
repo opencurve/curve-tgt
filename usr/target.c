@@ -50,11 +50,7 @@ static struct target global_target;
 static tgtadm_err do_tgt_device_destroy(int tid, uint64_t lun, int force,
 	int locked);
 
-static int lun_cmp(struct scsi_lu *a, struct scsi_lu *b);
-
-RB_GENERATE2(lu_tree, scsi_lu, device_sibling, lun_cmp, uint64_t, lun);
-
-static int lun_cmp(struct scsi_lu *a, struct scsi_lu *b)
+static inline int lun_cmp(struct scsi_lu *a, struct scsi_lu *b)
 {
 	if (a->lun < b->lun)
 		return -1;
@@ -62,6 +58,8 @@ static int lun_cmp(struct scsi_lu *a, struct scsi_lu *b)
 		return 1;
 	return 0;
 }
+
+RB_GENERATE2(lu_tree, scsi_lu, device_sibling, lun_cmp, uint64_t, lun);
 
 int device_type_register(struct device_type_template *t)
 {
