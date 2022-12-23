@@ -209,6 +209,8 @@ struct scsi_lu {
 	/* the list of devices belonging to a target */
 	struct list_head device_siblings;
 
+	RB_ENTRY(scsi_lu) tnode;
+
 	struct list_head lu_itl_info_list;
 
 	struct tgt_cmd_queue cmd_queue;

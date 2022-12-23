@@ -49,6 +49,20 @@ static struct target global_target;
 static tgtadm_err do_tgt_device_destroy(int tid, uint64_t lun, int force,
 	int locked);
 
+static int lun_cmp(struct scsi_lu *a, struct scsi_lu *b);
+
+RB_PROTOTYPE(lun_tree, scsi_lu, tnode,);
+RB_GENERATE2(lun_tree, scsi_lu, tnode, lun_cmp, uint64_t, lun);
+
+static int lun_cmp(struct scsi_lu *a, struct scsi_lu *b)
+{
+	if (a->lun < b->lun)
+		return -1;
+	else if (a->lun > b->lun)
+		return 1;
+	return 0;
+}
+
 int device_type_register(struct device_type_template *t)
 {
 	list_add_tail(&t->device_type_siblings, &device_type_list);
@@ -415,12 +429,16 @@ int it_nexus_destroy_in_target(struct target *target, uint64_t itn_id)
 
 static struct scsi_lu *device_lookup(struct target *target, uint64_t lun)
 {
+	return lun_tree_RB_LOOKUP(&target->device_tree, lun); 
+
+/*
 	struct scsi_lu *lu;
 
 	list_for_each_entry(lu, &target->device_list, device_siblings)
 		if (lu->lun == lun)
 			return lu;
 	return NULL;
+*/
 }
 
 static void cmd_hlist_insert(struct it_nexus *itn, struct scsi_cmd *cmd)
@@ -726,6 +744,7 @@ tgtadm_err tgt_device_create(int tid, int dev_type, uint64_t lun, char *params,
 			break;
 	}
 	list_add_tail(&lu->device_siblings, &pos->device_siblings);
+	lun_tree_RB_INSERT(&target->device_tree, lu);
 
 	list_for_each_entry(itn, &target->it_nexus_list, nexus_siblings) {
 		itn_lu = zalloc(sizeof(*itn_lu));
@@ -835,6 +854,7 @@ static tgtadm_err do_tgt_device_destroy(int tid, uint64_t lun, int force, int lo
 	}
 
 	list_del(&lu->device_siblings);
+	lun_tree_RB_REMOVE(&target->device_tree, lu);
 
 	list_for_each_entry_safe(reg, reg_next, &lu->registration_list,
 				 registration_siblings) {
@@ -2286,6 +2306,8 @@ tgtadm_err tgt_target_create(int lld, int tid, char *args)
 	target->tid = tid;
 
 	INIT_LIST_HEAD(&target->device_list);
+
+	RB_INIT(&target->device_tree);
 
 	target->bst = bst;
 
