@@ -24,7 +24,8 @@ struct tgt_account {
 };
 
 
-RB_HEAD(lun_tree, scsi_lu);
+RB_HEAD(lu_tree, scsi_lu);
+RB_PROTOTYPE(lu_tree, scsi_lu, device_sibling,);
 struct target {
 	char *name;
 
@@ -37,7 +38,7 @@ struct target {
 
 	struct list_head device_list;
 
-	struct lun_tree device_tree;
+	struct lu_tree device_tree;
 
 	struct list_head it_nexus_list;
 
