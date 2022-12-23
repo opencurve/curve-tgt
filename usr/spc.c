@@ -377,7 +377,7 @@ sense:
 int spc_report_luns(int host_no, struct scsi_cmd *cmd)
 {
 	struct scsi_lu *lu;
-	struct list_head *dev_list = &cmd->c_target->device_list;
+	struct lu_tree *dev_tree = &cmd->c_target->device_tree;
 	uint32_t alloc_len, avail_len, remain_len, actual_len;
 	uint64_t lun, *data, *plun;
 	unsigned char key = ILLEGAL_REQUEST;
@@ -397,7 +397,7 @@ int spc_report_luns(int host_no, struct scsi_cmd *cmd)
 	actual_len = 8;
 	avail_len = 0; /* accumulate LUN list length */
 
-	list_for_each_entry(lu, dev_list, device_siblings) {
+	RB_FOREACH(lu, lu_tree, dev_tree) {
 		if (remain_len) {
 			lun = lu->lun;
 			lun = ((lun > 0xff) ? (0x1 << 30) : 0) |

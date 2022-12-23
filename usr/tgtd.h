@@ -209,9 +209,7 @@ struct scsi_lu {
 	unsigned int blk_shift;
 
 	/* the list of devices belonging to a target */
-	struct list_head device_siblings;
-
-	RB_ENTRY(scsi_lu) tnode;
+	RB_ENTRY(scsi_lu) device_sibling;
 
 	struct list_head lu_itl_info_list;
 

@@ -52,8 +52,7 @@ static tgtadm_err do_tgt_device_destroy(int tid, uint64_t lun, int force,
 
 static int lun_cmp(struct scsi_lu *a, struct scsi_lu *b);
 
-RB_PROTOTYPE_STATIC(lun_tree, scsi_lu, tnode,);
-RB_GENERATE2(lun_tree, scsi_lu, tnode, lun_cmp, uint64_t, lun);
+RB_GENERATE2(lu_tree, scsi_lu, device_sibling, lun_cmp, uint64_t, lun);
 
 static int lun_cmp(struct scsi_lu *a, struct scsi_lu *b)
 {
@@ -343,7 +342,7 @@ int it_nexus_create(int tid, uint64_t itn_id, int host_no, char *info)
 	gettimeofday(&tv, NULL);
 	itn->ctime = tv.tv_sec;
 
-	list_for_each_entry(lu, &target->device_list, device_siblings) {
+	RB_FOREACH(lu, lu_tree, &target->device_tree) {
 		itn_lu = zalloc(sizeof(*itn_lu));
 		if (!itn_lu)
 			goto out;
@@ -389,8 +388,7 @@ int it_nexus_destroy(int tid, uint64_t itn_id)
 	if (!list_empty(&itn->cmd_list))
 		return -EBUSY;
 
-	list_for_each_entry(lu, &itn->nexus_target->device_list,
-			    device_siblings) {
+	RB_FOREACH(lu, lu_tree, &itn->nexus_target->device_tree) {
 		device_release(tid, itn_id, lu->lun, 0);
 	}
 
@@ -416,8 +414,7 @@ int it_nexus_destroy_in_target(struct target *target, uint64_t itn_id)
 	if (!list_empty(&itn->cmd_list))
 		return -EBUSY;
 
-	list_for_each_entry(lu, &itn->nexus_target->device_list,
-			    device_siblings) {
+	RB_FOREACH(lu, lu_tree, &itn->nexus_target->device_tree) {
 		device_release(target->tid, itn_id, lu->lun, 0);
 	}
 
@@ -430,16 +427,7 @@ int it_nexus_destroy_in_target(struct target *target, uint64_t itn_id)
 
 static struct scsi_lu *device_lookup(struct target *target, uint64_t lun)
 {
-	return lun_tree_RB_LOOKUP(&target->device_tree, lun); 
-
-/*
-	struct scsi_lu *lu;
-
-	list_for_each_entry(lu, &target->device_list, device_siblings)
-		if (lu->lun == lun)
-			return lu;
-	return NULL;
-*/
+	return lu_tree_RB_LOOKUP(&target->device_tree, lun); 
 }
 
 static void cmd_hlist_insert(struct it_nexus *itn, struct scsi_cmd *cmd)
@@ -566,7 +554,7 @@ tgtadm_err tgt_device_create(int tid, int dev_type, uint64_t lun, char *params,
 	int lu_bsoflags = 0;
 	tgtadm_err adm_err = TGTADM_SUCCESS;
 	struct target *target;
-	struct scsi_lu *lu, *pos;
+	struct scsi_lu *lu;
 	struct device_type_template *t;
 	struct backingstore_template *bst;
 	struct it_nexus_lu_info *itn_lu, *itn_lu_pos;
@@ -740,12 +728,7 @@ tgtadm_err tgt_device_create(int tid, int dev_type, uint64_t lun, char *params,
 	if (tgt_drivers[target->lid]->lu_create)
 		tgt_drivers[target->lid]->lu_create(lu);
 
-	list_for_each_entry(pos, &target->device_list, device_siblings) {
-		if (lu->lun < pos->lun)
-			break;
-	}
-	list_add_tail(&lu->device_siblings, &pos->device_siblings);
-	lun_tree_RB_INSERT(&target->device_tree, lu);
+	lu_tree_RB_INSERT(&target->device_tree, lu);
 
 	list_for_each_entry(itn, &target->it_nexus_list, nexus_siblings) {
 		itn_lu = zalloc(sizeof(*itn_lu));
@@ -854,8 +837,7 @@ static tgtadm_err do_tgt_device_destroy(int tid, uint64_t lun, int force, int lo
 		}
 	}
 
-	list_del(&lu->device_siblings);
-	lun_tree_RB_REMOVE(&target->device_tree, lu);
+	lu_tree_RB_REMOVE(&target->device_tree, lu);
 
 	list_for_each_entry_safe(reg, reg_next, &lu->registration_list,
 				 registration_siblings) {
@@ -1117,7 +1099,7 @@ tgtadm_err tgt_stat_target(struct target *target, struct concat_buf *b)
 	struct scsi_lu *lu;
 	tgtadm_err adm_err = TGTADM_SUCCESS;
 
-	list_for_each_entry(lu, &target->device_list, device_siblings)
+	RB_FOREACH(lu, lu_tree, &target->device_tree)
 		tgt_stat_device(target, lu, b);
 
 	return adm_err;
@@ -1227,9 +1209,7 @@ int target_cmd_queue(struct target *target, struct scsi_cmd *cmd)
 	cmd->dev = device_lookup(target, dev_id);
 	/* use LUN0 */
 	if (!cmd->dev)
-		cmd->dev = list_first_entry(&target->device_list,
-					    struct scsi_lu,
-					    device_siblings);
+		cmd->dev = RB_FIRST(lu_tree, &target->device_tree);
 
 	cmd->itn_lu_info = it_nexus_lu_info_lookup(itn, cmd->dev->lun);
 
@@ -2140,7 +2120,7 @@ tgtadm_err tgt_target_show_all(struct concat_buf *b)
 		}
 
 		concat_printf(b, _TAB1 "LUN information:\n");
-		list_for_each_entry(lu, &target->device_list, device_siblings)
+		RB_FOREACH(lu, lu_tree, &target->device_tree)
 			concat_printf(b,
 				_TAB2 "LUN: %" PRIu64 "\n"
 				_TAB3 "Type: %s\n"
@@ -2401,10 +2381,9 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 		return TGTADM_TARGET_ACTIVE;
 	}
 
-	while (!list_empty(&target->device_list)) {
+	while (!RB_EMPTY(&target->device_tree)) {
 		/* we remove lun0 last */
-		lu = list_entry(target->device_list.prev, struct scsi_lu,
-				device_siblings);
+		lu = RB_MAX(lu_tree, &target->device_tree);
 		adm_err = do_tgt_device_destroy(tid, lu->lun, 1, 1);
 		if (adm_err != TGTADM_SUCCESS) {
 			target_unlock(target);
