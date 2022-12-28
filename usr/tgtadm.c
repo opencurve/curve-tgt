@@ -211,7 +211,7 @@ static int ipc_mgmt_connect(int *fd)
 {
 	int err;
 	struct sockaddr_un addr;
-	char mgmt_path[256];
+	char mgmt_path[sizeof(addr.sun_path)];
 
 	*fd = socket(AF_LOCAL, SOCK_STREAM, 0);
 	if (*fd < 0) {
