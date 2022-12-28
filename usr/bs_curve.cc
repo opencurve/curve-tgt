@@ -724,7 +724,6 @@ static int bs_curve_getlength(struct scsi_lu *lu, uint64_t *size)
 	int64_t curve_size = g_curve->StatFile(info->curve_name);
 	if (curve_size >= 0) {
 		*size = curve_size;
-	    eprintf("StateFile %zd\n", curve_size);
 		return 0;
 	}
 	eprintf("failed to StateFile %s\n", info->curve_name);
