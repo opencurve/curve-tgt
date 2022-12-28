@@ -2292,6 +2292,7 @@ tgtadm_err tgt_target_create(int lld, int tid, char *args)
 
 	target->target_state = SCSI_TARGET_READY;
 	target->lid = lld;
+	mutex_init(&target->mutex);
 
 	if (is_iser) {
 		target->evloop = main_evloop;
@@ -2301,6 +2302,7 @@ tgtadm_err tgt_target_create(int lld, int tid, char *args)
 			eprintf("Target %s can not create evloop\n", targetname);
 			free(target->name);
 			free(target->account.in_aids);
+			mutex_destroy(&target->mutex);
 			free(target);
 			return TGTADM_NOMEM;
 		}
