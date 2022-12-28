@@ -384,6 +384,9 @@ close_ctx:
 
 static void bs_aio_close(struct scsi_lu *lu)
 {
+	struct bs_aio_info *info = BS_AIO_I(lu);
+	tgt_event_delete(lu->tgt->evloop, info->evt_fd);
+	close(info->evt_fd);
 	close(lu->fd);
 }
 
