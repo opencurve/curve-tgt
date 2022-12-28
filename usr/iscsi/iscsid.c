@@ -1502,7 +1502,7 @@ static int iscsi_tm_execute(struct iscsi_task *task)
 		task->result = err;
 	else {
 		int ret;
-		ret = target_mgmt_request(conn->session->target->base_target->tid,
+		ret = target_mgmt_request(conn->session->target->base_target,
 					  conn->session->tsih,
 					  (unsigned long)task, fn, req->lun,
 					  req->rtt, 0);

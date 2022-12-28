@@ -422,7 +422,7 @@ static int sbc_release(int host_no, struct scsi_cmd *cmd)
 {
 	int ret;
 
-	ret = device_release(cmd->c_target->tid, cmd->cmd_itn_id,
+	ret = device_release(cmd->c_target, cmd->cmd_itn_id,
 			     cmd->dev->lun, 0);
 
 	return ret ? SAM_STAT_RESERVATION_CONFLICT : SAM_STAT_GOOD;

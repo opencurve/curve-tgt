@@ -272,7 +272,7 @@ extern tgtadm_err tgt_device_create(int tid, int dev_type, uint64_t lun, char *a
 extern tgtadm_err tgt_device_destroy(int tid, uint64_t lun, int force);
 extern tgtadm_err tgt_device_update(int tid, uint64_t dev_id, char *name);
 extern int device_reserve(struct scsi_cmd *cmd);
-extern int device_release(int tid, uint64_t itn_id, uint64_t lun, int force);
+extern int device_release(struct target *target, uint64_t itn_id, uint64_t lun, int force);
 extern int device_reserved(struct scsi_cmd *cmd);
 extern tgtadm_err tgt_device_path_update(struct target *target, struct scsi_lu *lu, char *path);
 extern tgtadm_err tgt_device_size_update(struct target *target, struct scsi_lu *lu, char *buf);
@@ -312,12 +312,11 @@ extern int target_cmd_perform_passthrough(int tid, struct scsi_cmd *cmd);
 extern void target_cmd_done(struct scsi_cmd *cmd);
 extern void __cmd_done_passthrough(struct target *target, struct scsi_cmd *cmd);
 
-extern enum mgmt_req_result target_mgmt_request(int tid, uint64_t itn_id,
+extern enum mgmt_req_result target_mgmt_request(struct target *target, uint64_t itn_id,
 						uint64_t req_id, int function,
 						uint8_t *lun, uint64_t tag,
 						int host_no);
 
-extern struct it_nexus *it_nexus_lookup(int tid, uint64_t itn_id);
 extern struct it_nexus *it_nexus_lookup_in_target(struct target *,
 		uint64_t itn_id);
 extern void target_cmd_io_done(struct scsi_cmd *cmd, int result);
