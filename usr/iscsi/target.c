@@ -785,7 +785,7 @@ static tgtadm_err _stat_iscsi_session(struct iscsi_session *session,
 	dprintf("tsih:%d lun:%" PRIu64 " filter_lun:%d\n",
 		(unsigned int)session->tsih, lun, filter_lun);
 
-	itn = it_nexus_lookup(tid, itn_id);
+	itn = it_nexus_lookup_in_target(target->base_target, itn_id);
 	if (!itn) {
 		eprintf("invalid nexus %d %" PRIx64 "\n", tid, itn_id);
 		return TGTADM_NO_SESSION;
