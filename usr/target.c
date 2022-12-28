@@ -372,6 +372,7 @@ out:
 	return -ENOMEM;
 }
 
+#if 0
 int it_nexus_destroy(int tid, uint64_t itn_id)
 {
 	struct it_nexus *itn;
@@ -396,6 +397,7 @@ int it_nexus_destroy(int tid, uint64_t itn_id)
 	free(itn);
 	return 0;
 }
+#endif
 
 /* function does not need target list lock */
 int it_nexus_destroy_in_target(struct target *target, uint64_t itn_id)
@@ -413,7 +415,7 @@ int it_nexus_destroy_in_target(struct target *target, uint64_t itn_id)
 		return -EBUSY;
 
 	RB_FOREACH(lu, lu_tree, &itn->nexus_target->device_tree) {
-		device_release(target->tid, itn_id, lu->lun, 0);
+		device_release(target, itn_id, lu->lun, 0);
 	}
 
 	it_nexus_del_lu_info(itn);
@@ -975,14 +977,13 @@ int device_reserve(struct scsi_cmd *cmd)
 	return 0;
 }
 
-int device_release(int tid, uint64_t itn_id, uint64_t lun, int force)
+int device_release(struct target *target, uint64_t itn_id, uint64_t lun, int force)
 {
-	struct target *target;
 	struct scsi_lu *lu;
 
-	lu = __device_lookup(tid, lun, &target);
+	lu = device_lookup(target, lun);
 	if (!lu) {
-		eprintf("invalid target and lun %d %" PRIu64 "\n", tid, lun);
+		eprintf("target %d, invalid lun %" PRIu64 "\n", target->tid, lun);
 		return 0;
 	}
 
@@ -1324,11 +1325,10 @@ static void post_cmd_done(struct tgt_cmd_queue *q)
 	list_for_each_entry_safe(cmd, tmp, &q->queue, qlist) {
 		enabled = cmd_enabled(q, cmd);
 		if (enabled) {
-			int tid = cmd->c_target->tid;
 			uint64_t itn_id = cmd->cmd_itn_id;
 			struct it_nexus *nexus;
 
-			nexus = it_nexus_lookup(tid, itn_id);
+			nexus = it_nexus_lookup_in_target(cmd->c_target, itn_id);
 			if (!nexus)
 				eprintf("BUG: %" PRIu64 "\n", itn_id);
 
@@ -1441,24 +1441,17 @@ static int abort_task_set(struct mgmt_req *mreq, struct target *target,
 	return count;
 }
 
-enum mgmt_req_result target_mgmt_request(int tid, uint64_t itn_id,
+enum mgmt_req_result target_mgmt_request(struct target *target, uint64_t itn_id,
 					 uint64_t req_id, int function,
 					 uint8_t *lun_buf, uint64_t tag,
 					 int host_no)
 {
-	struct target *target;
 	struct mgmt_req *mreq;
 	int err = 0, count, send = 1;
 	struct it_nexus *itn;
 	struct it_nexus_lu_info *itn_lu;
 	uint64_t lun;
 	uint16_t asc;
-
-	target = target_lookup(tid);
-	if (!target) {
-		eprintf("invalid tid %d\n", tid);
-		return MGMT_REQ_FAILED;
-	}
 
 	mreq = zalloc(sizeof(*mreq));
 	if (!mreq) {
@@ -1512,7 +1505,7 @@ enum mgmt_req_result target_mgmt_request(int tid, uint64_t itn_id,
 		break;
 	case LOGICAL_UNIT_RESET:
 		lun = scsi_get_devid(target->lid, lun_buf);
-		device_release(target->tid, itn_id, lun, 1);
+		device_release(target, itn_id, lun, 1);
 		count = abort_task_set(mreq, target, itn_id, 0, lun_buf, 0);
 		if (mreq->busy)
 			send = 0;

@@ -1913,7 +1913,7 @@ static int iser_tm_exec(struct iser_task *task)
 		task->result = err;
 	else {
 		int ret;
-		ret = target_mgmt_request(session->target->tid, session->tsih,
+		ret = target_mgmt_request(session->target->base_target, session->tsih,
 					  (unsigned long) task, fn, req_bhs->lun,
 					  req_bhs->rtt, 0);
 		set_task_in_scsi(task);
