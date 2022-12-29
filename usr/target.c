@@ -1098,8 +1098,10 @@ tgtadm_err tgt_stat_target(struct target *target, struct concat_buf *b)
 	struct scsi_lu *lu;
 	tgtadm_err adm_err = TGTADM_SUCCESS;
 
+	target_lock(target);	
 	RB_FOREACH(lu, lu_tree, &target->device_tree)
 		tgt_stat_device(target, lu, b);
+	target_unlock(target);	
 
 	return adm_err;
 }
