@@ -11,10 +11,10 @@ export VERSION PREFIX
 
 # Export the feature switches so sub-make knows about them
 export CURVE_CBD=1
-export ISCSI_RDMA
-export CEPH_RBD
-export GLFS_BD
-export SD_NOTIFY
+#export ISCSI_RDMA
+#export CEPH_RBD
+#export GLFS_BD
+#export SD_NOTIFY
 
 .PHONY: all
 all: programs doc conf scripts
