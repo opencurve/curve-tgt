@@ -117,7 +117,8 @@ iser target服务目前依然归属于主线程服务，因为我们还不具备
 
 ## 7. 性能对比
 
-我们为tgt配置了3块盘，一块curvebs卷，两块本地盘
+我们为tgt配置了3块盘，一块curvebs卷，两块本地盘, 配置文件:
+/etc/tgt/targets.conf
 
 ```
 
