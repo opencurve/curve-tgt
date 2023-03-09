@@ -43,6 +43,13 @@
 /* The value is advised by linux kernel document msg_zerocopy.html */
 #define LINUX_ZEROCOPY_THRESHOLD (1024 * 10)
 
+#ifndef MSG_ZEROCOPY
+#define MSG_ZEROCOPY    0x4000000
+#endif
+#ifndef MSG_ERRQUEUE
+#define MSG_ERRQUEUE    0x2000
+#endif
+
 static int g_enable_zerocopy = 1;
 static int listen_fds[128];
 static struct iscsi_transport iscsi_tcp;
