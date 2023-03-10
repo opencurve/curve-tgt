@@ -50,7 +50,7 @@
 #define MSG_ERRQUEUE    0x2000
 #endif
 
-static int g_enable_zerocopy = 1;
+static int g_enable_zerocopy = 0;
 static int listen_fds[128];
 static struct iscsi_transport iscsi_tcp;
 static LIST_HEAD(g_conn_gc_list);
