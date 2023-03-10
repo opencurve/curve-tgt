@@ -115,8 +115,8 @@ static int tgt_curvedev_get_path(const char *curve_path, char* path)
 		errno = EINVAL;
 		return -1;
 	}
-    strcpy(path, p+1);                                                          
-    path[0] = '/'; 
+	strcpy(path, p+1);
+	path[0] = '/'; 
 	return 0;
 }
 
