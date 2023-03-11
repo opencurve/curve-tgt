@@ -44,7 +44,6 @@ struct iscsi_transport {
 	int (*ep_init_evloop) (struct tgt_evloop *evloop);
 	void (*ep_fini_evloop) (struct tgt_evloop *evloop);
 	void (*ep_migrate_evloop) (struct iscsi_connection *conn, struct tgt_evloop *old, struct tgt_evloop *new);
-	void (*ep_start_output_buf)(struct iscsi_connection *conn, char *buffer, size_t len);
 };
 
 extern int iscsi_transport_register(struct iscsi_transport *);
