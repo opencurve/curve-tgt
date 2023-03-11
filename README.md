@@ -17,7 +17,7 @@ tgt是一个开源iscsi服务器，详情请见 <A>https://github.com/fujita/tgt
 
 ### 3.2 为每个target创建一个epoll线程
 
-为了避免多个target共享一个epoll时依然可能出现超过单个cpu处理能力的问题，我们为每一个 target设置了一个epoll线程。target epoll的cpu使用由OS负责调度，这样在各target上可以 实现公平的cpu使用。当然如果网络速度再快，依然会出现单个epoll线程处理不过来一个iscsi target上的请求，但是目前这个方案依然是我们能做的最好方案。
+为了避免多个target共享一个epoll时依然可能出现超过单个cpu处理能力的问题，当前我们的解决方法是为每一个target设置了一个epoll线程。target epoll的cpu使用由OS负责调度，这样在各target上可以实现公平的cpu使用。
 
 ### 3.3 管理平面
 
@@ -98,24 +98,11 @@ tgtadm_err tgt_target_destroy(int lld_no, int tid, int force)
 
 为tgt提供了访问curve的驱动，详见doc/README.curve， 这样用户就可以在任何支持iscsi的操作系统上使用curve块设备存储，例如Windows。
 
-## 5. Zero Copy
-
-修改后的版本支持Linux TCP send的MSG_ZEROCOPY零拷贝技术。在我们使用fio的测试中,
-16KB块大小128深度的随机读比没有是使用zerocopy技术的系统提升了25%的性能。
-
-Linux的TCP zerocopy发送技术需要使用较多的optmem，实际环境中往往需要调大参数，例如:
-   sysctl -w net.core.optmem_max=1048576
-
-Linux的TCP zerocopy发送技术也与ulimit的max locked memory相关，需要相应增大这个参数，否则tgt在遇到NOBUFS会停止使用zerocopy。
-
-某些情况下需要关闭zerocopy, 可以使用--tcp_zerocopy 0参数，例如：<br>
-tgtd --tcp_zerocopy 0
-
-## 6. 关于iser
+## 5. 关于iser
 
 iser target服务目前依然归属于主线程服务，因为我们还不具备测试RDMA的条件，所以这部分代码 还没有修改。
 
-## 7. 性能对比
+## 6. 性能对比
 
 我们为tgt配置了3块盘，一块curvebs卷，两块本地盘，配置文件:
 /etc/tgt/targets.conf
