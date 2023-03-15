@@ -202,6 +202,8 @@ void create_pid_file(const char *path)
 		eprintf("can't write and remove %s, %m\n", path);
 		unlink(path);
 	}
+}
+
 static inline int event_cmp(struct event_data *a, struct event_data *b)
 {
 	if (a->fd < b->fd)
@@ -837,7 +839,7 @@ int main(int argc, char **argv)
 	if (err)
 		exit(1);
 
-	err = log_init(program_name, LOG_SPACE_SIZE, is_daemon, is_debug);
+	err = log_init(program_name, LOG_SPACE_SIZE, use_logger, is_debug);
 	if (err)
 		exit(1);
 

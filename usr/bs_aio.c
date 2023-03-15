@@ -410,7 +410,7 @@ static void bs_aio_exit(struct scsi_lu *lu)
 {
 	struct bs_aio_info *info = BS_AIO_I(lu);
 
-	tgt_event_del(info->evt_fd);
+	tgt_event_delete(lu->tgt->evloop, info->evt_fd);
 	close(info->evt_fd);
 	io_destroy(info->ctx);
 }

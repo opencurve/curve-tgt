@@ -593,9 +593,4 @@ struct iscsi_reject {
 
 /************************* RFC 3720 End *****************************/
 
-struct __attribute__ ((__packed__)) iscsi_sense_data {                          
-        uint16_t length;                                                        
-        uint8_t data[0];                                                        
-};
-
 #endif /* ISCSI_PROTO_H */
