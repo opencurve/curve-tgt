@@ -610,19 +610,14 @@ static size_t iscsi_tcp_close(struct iscsi_connection *conn)
 	return 0;
 }
 
-static void iscsi_tcp_free(struct iscsi_tcp_connection *tcp_conn)
-{
-	close(tcp_conn->fd);
-	free(tcp_conn);
-}
-
 static void iscsi_tcp_release(struct iscsi_connection *conn)
 {
 	struct iscsi_tcp_connection *tcp_conn = TCP_CONN(conn);
 
 	conn_exit(conn);
+	close(tcp_conn->fd);
 	list_del(&tcp_conn->tcp_conn_siblings);
-	iscsi_tcp_free(tcp_conn);
+	free(tcp_conn);
 }
 
 static int iscsi_tcp_show(struct iscsi_connection *conn, char *buf, int rest)
