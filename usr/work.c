@@ -68,6 +68,22 @@ static void work_timer_schedule_evt(struct work_timer *wt)
 		eprintf("Failed to write to pipe, %m\n");
 }
 
+static void work_timer_evt_handler_sched(struct tgt_evloop *evloop, int fd, int events, void *data)
+{
+	struct work_timer *wt = data;
+	unsigned int n = 0;
+	int err;
+
+	err = read(wt->pipe_fd[0], &n, sizeof(n));
+	if (err) {
+		if (errno != EAGAIN) {
+			eprintf("Failed to read to pipe, %m\n");
+		}
+	}
+	wt->timer_pending = 0;
+	execute_work(wt);
+}
+
 static void work_timer_evt_handler(struct tgt_evloop *evloop, int fd, int events, void *data)
 {
 	struct work_timer *wt = data;
@@ -161,8 +177,7 @@ int work_timer_start(struct tgt_evloop *evloop)
 		return err;
 	}
 
-#if 0
-	err = tgt_event_insert(evloop, wt->pipe_fd[0], EPOLLIN, work_timer_evt_handler, wt);
+	err = tgt_event_insert(evloop, wt->pipe_fd[0], EPOLLIN, work_timer_evt_handler_sched, wt);
 	if (err) {
 		eprintf("failed to add timer pipe fd:%d\n", wt->pipe_fd[0]);
 		tgt_event_delete(evloop, wt->timer_fd);
@@ -172,7 +187,6 @@ int work_timer_start(struct tgt_evloop *evloop)
 		free(wt);
 		return err;
 	}
-#endif
 
 	tgt_event_set_userdata(evloop, EV_DATA_WORK_TIMER, wt);
 
