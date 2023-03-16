@@ -524,7 +524,6 @@ retry:
 			if (tev != &evloop->async_event)
 				tev->handler(evloop, tev->fd, events[i].events, tev->data);
 			else {
-				printf("async event\n");
 				eventfd_t value;
 				eventfd_read(evloop->async_fd, &value);
 			}
