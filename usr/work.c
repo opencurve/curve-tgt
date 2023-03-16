@@ -161,6 +161,7 @@ int work_timer_start(struct tgt_evloop *evloop)
 		return err;
 	}
 
+#if 0
 	err = tgt_event_insert(evloop, wt->pipe_fd[0], EPOLLIN, work_timer_evt_handler, wt);
 	if (err) {
 		eprintf("failed to add timer pipe fd:%d\n", wt->pipe_fd[0]);
@@ -171,6 +172,7 @@ int work_timer_start(struct tgt_evloop *evloop)
 		free(wt);
 		return err;
 	}
+#endif
 
 	tgt_event_set_userdata(evloop, EV_DATA_WORK_TIMER, wt);
 
