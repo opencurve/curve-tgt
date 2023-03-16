@@ -1180,6 +1180,7 @@ static int iscsi_data_rsp_build(struct iscsi_task *task)
 	conn->rsp.data += task->offset;
 
 	task->offset += datalen;
+
 	return 0;
 }
 
@@ -1978,7 +1979,6 @@ static int iscsi_scsi_cmd_tx_done(struct iscsi_connection *conn)
 static int iscsi_task_tx_done(struct iscsi_connection *conn)
 {
 	struct iscsi_task *task = conn->tx_task;
-	int err = 0;
 	uint8_t op;
 
 	op = task->req.opcode & ISCSI_OPCODE_MASK;
@@ -2012,7 +2012,7 @@ static int iscsi_task_tx_done(struct iscsi_connection *conn)
 	}
 
 	conn->tx_task = NULL;
-	return err;
+	return 0;
 }
 
 static int iscsi_task_tx_start(struct iscsi_connection *conn)
