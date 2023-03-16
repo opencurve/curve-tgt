@@ -345,6 +345,7 @@ extern void iscsi_rsp_set_residual(struct iscsi_cmd_rsp *rsp, struct scsi_cmd *s
 /* iscsid.c iscsi_task */
 extern void iscsi_free_task(struct iscsi_task *task);
 extern void iscsi_free_cmd_task(struct iscsi_task *task);
+
 /* session.c */
 extern struct iscsi_session *session_find_name(int tid, const char *iname, uint8_t *isid);
 extern struct iscsi_session *session_lookup_by_tsih(int tid, uint16_t tsih);
@@ -389,6 +390,5 @@ extern tgtadm_err isns_update(char *params);
 extern int isns_scn_access(int tid, char *name);
 extern int isns_target_register(char *name);
 extern int isns_target_deregister(char *name);
-
 
 #endif	/* ISCSID_H */
