@@ -157,7 +157,7 @@ static void *bs_thread_worker_fn(void *arg)
 		list_add_tail(&cmd->bs_list, &info->finished_list);
 		pthread_mutex_unlock(&info->finished_lock);
 
-		if (empty &&eventfd_write(info->sig_fd, 1) == -1 &&errno != EAGAIN) {
+		if (empty && eventfd_write(info->sig_fd, 1) == -1 && errno != EAGAIN) {
 			eprintf("failed to write to sig_fd: %s\n", strerror(errno));
 			abort();
 		}
