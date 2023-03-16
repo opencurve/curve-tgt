@@ -43,14 +43,6 @@
 static int listen_fds[128];
 static struct iscsi_transport iscsi_tcp;
 
-struct zerocopy_info {
-	struct list_head link;
-	char *buf;
-	size_t len;
-	uint64_t sn;
-	int free;
-};
-
 struct iscsi_tcp_connection {
 	int fd;
 
