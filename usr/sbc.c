@@ -125,6 +125,7 @@ static int sbc_mode_sense(int host_no, struct scsi_cmd *cmd)
 	if (ret != SAM_STAT_GOOD)
 		return ret;
 
+#if 0   /* WTF! Our code supports per-device config, while offical branch does not! */
 	if (cmd->dev->attrs.dpofua && ret == SAM_STAT_GOOD) {
 		const uint8_t device_specific = 0x10; /* DPOFUA */
 		uint8_t *data, mode6;
@@ -137,7 +138,7 @@ static int sbc_mode_sense(int host_no, struct scsi_cmd *cmd)
 		else
 			data[3] = device_specific;
 	}
-
+#endif
 	/*
 	 * If this is a read-only lun, we must set the write protect bit
 	 */
