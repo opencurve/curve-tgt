@@ -25,6 +25,7 @@
 #include <signal.h>
 #include <sys/epoll.h>
 #include <sys/time.h>
+#include <fcntl.h>
 
 #include "list.h"
 #include "util.h"
@@ -64,8 +65,10 @@ static void work_timer_schedule_evt(struct work_timer *wt)
 	wt->timer_pending = 1;
 
 	err = write(wt->pipe_fd[1], &n, sizeof(n));
-	if (err < 0)
-		eprintf("Failed to write to pipe, %m\n");
+	if (err < 0) {
+		if (errno != EAGAIN)
+			eprintf("Failed to write to pipe, %m\n");
+	}
 }
 
 static void work_timer_evt_handler_sched(struct tgt_evloop *evloop, int fd, int events, void *data)
@@ -142,7 +145,7 @@ int work_timer_start(struct tgt_evloop *evloop)
 		free(wt);
 		return -1;
 	}
-	err = pipe(wt->pipe_fd);
+	err = pipe2(wt->pipe_fd, O_NONBLOCK);
 	if (err) {
 		eprintf("can not create pipe, %m\n");
 		close(wt->timer_fd);
