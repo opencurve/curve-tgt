@@ -291,6 +291,8 @@ static void bs_curve_aio_callback(struct CurveAioContext* curve_ctx)
 	case WRITE_10:
 	case WRITE_12:
 	case WRITE_16:
+	case WRITE_SAME:
+	case WRITE_SAME_16:
 		asc = ASC_WRITE_ERROR;
 		break;
 	default:
