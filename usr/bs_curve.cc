@@ -602,7 +602,6 @@ static int bs_curve_open(struct scsi_lu *lu, char *dev, int *fd, uint64_t *size)
 	struct bs_curve_info *info = BS_CURVE_I(lu);
 	int ret, afd;
 	uint32_t blksize = 0;
-	int64_t curve_size = 0;
 	OpenFlags openflags;
 
 	ret = tgt_curvedev_get_path(dev, path);
@@ -619,18 +618,19 @@ static int bs_curve_open(struct scsi_lu *lu, char *dev, int *fd, uint64_t *size)
 	}
 	blksize = 4096; //FIXME
 
-	curve_size = g_curve->StatFile(path);
-	if (curve_size < 0) {
+    FileStatInfo statInfo;
+	ret = g_curve->StatFile(info->curve_fd, &statInfo);
+	if (ret < 0) {
 		g_curve->Close(info->curve_fd);
         	info->curve_fd = -1;
 	    	eprintf("failed to StateFile %s\n", path);
 		return -1;
 	}
 
-	eprintf("opened curve volume %s for tgt:%d lun:%" PRId64 ", curve_fd:%d, size:%zd\n",
-		 path, info->lu->tgt->tid, info->lu->lun, info->curve_fd, curve_size);
+	*size = statInfo.length;
 
-	*size = curve_size;
+	eprintf("opened curve volume %s for tgt:%d lun:%" PRId64 ", curve_fd:%d, size:%zd\n",
+		 path, info->lu->tgt->tid, info->lu->lun, info->curve_fd, *size);
 
 	afd = eventfd(0, O_NONBLOCK);
 	if (afd < 0) {
@@ -723,9 +723,11 @@ static void bs_curve_exit(struct scsi_lu *lu)
 static int bs_curve_getlength(struct scsi_lu *lu, uint64_t *size)
 {
 	struct bs_curve_info *info = BS_CURVE_I(lu);
-	int64_t curve_size = g_curve->StatFile(info->curve_name);
-	if (curve_size >= 0) {
-		*size = curve_size;
+
+    FileStatInfo statInfo;
+	int ret = g_curve->StatFile(info->curve_fd, &statInfo);
+	if (ret >= 0) {
+		*size = statInfo.length;
 		return 0;
 	}
 	eprintf("failed to StateFile %s\n", info->curve_name);
